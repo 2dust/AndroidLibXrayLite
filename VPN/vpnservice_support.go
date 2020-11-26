@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	v2net "github.com/xtls/xray-core/common/net"
-	v2internet "github.com/xtls/xray-core/transport/internet"
+	v2net "github.com/xtls/xray-core/v1/common/net"
+	v2internet "github.com/xtls/xray-core/v1/transport/internet"
 )
 
 type protectSet interface {
