@@ -1,0 +1,9 @@
+.vscode
+gradle/build.gradle
+*.pb.go
+binary*.go
+conf/demo/
+
+demo/
+assets/
+libv2ray*.[a|j]ar
