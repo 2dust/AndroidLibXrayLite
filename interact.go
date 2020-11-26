@@ -17,16 +17,16 @@ import (
 	"github.com/2dust/AndroidLibXrayLite/VPN"
 	mobasset "golang.org/x/mobile/asset"
 
-	v2core "github.com/xtls/xray-core/v1/core"
-	v2net "github.com/xtls/xray-core/v1/core/common/net"
-	v2filesystem "github.com/xtls/xray-core/v1/core/common/platform/filesystem"
-	v2stats "github.com/xtls/xray-core/v1/core/features/stats"
-	v2serial "github.com/xtls/xray-core/v1/core/infra/conf/serial"
-	_ "github.com/xtls/xray-core/v1/core/main/distro/all"
-	v2internet "github.com/xtls/xray-core/v1/core/transport/internet"
+	v2core "github.com/xtls/xray-core/v1"
+	v2net "github.com/xtls/xray-core/v1/common/net"
+	v2filesystem "github.com/xtls/xray-core/v1/common/platform/filesystem"
+	v2stats "github.com/xtls/xray-core/v1/features/stats"
+	v2serial "github.com/xtls/xray-core/v1/infra/conf/serial"
+	_ "github.com/xtls/xray-core/v1/main/distro/all"
+	v2internet "github.com/xtls/xray-core/v1/transport/internet"
 
-	v2applog "github.com/xtls/xray-core/v1/core/app/log"
-	v2commlog "github.com/xtls/xray-core/v1/core/common/log"
+	v2applog "github.com/xtls/xray-core/v1/app/log"
+	v2commlog "github.com/xtls/xray-core/v1/common/log"
 )
 
 const (

@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	v2commlog "github.com/xtls/xray-core/v1/core/common/log"
+	v2commlog "github.com/xtls/xray-core/v1/common/log"
 )
 
 // This struct creates our own log writer without datatime stamp
