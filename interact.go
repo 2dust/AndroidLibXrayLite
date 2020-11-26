@@ -17,7 +17,7 @@ import (
 	"github.com/2dust/AndroidLibXrayLite/VPN"
 	mobasset "golang.org/x/mobile/asset"
 
-	v2core "github.com/xtls/xray-core"
+	v2core "github.com/xtls/xray-core/core"
 	v2net "github.com/xtls/xray-core/common/net"
 	v2filesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	v2stats "github.com/xtls/xray-core/features/stats"
