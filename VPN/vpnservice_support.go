@@ -175,7 +175,7 @@ func (d *ProtectedDialer) PrepareDomain(domainName string, closeCh <-chan struct
 			log.Printf("PrepareDomain err: %v\n", err)
 			select {
 			case <-closeCh:
-				log.Printf("PrepareDomain exit due to v2ray closed")
+				log.Printf("PrepareDomain exit due to core closed")
 				return
 			case <-time.After(time.Second * 2):
 			}
