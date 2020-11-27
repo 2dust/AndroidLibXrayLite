@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	v2Asset = "v2ray.location.asset"
+	v2Asset = "xray.location.asset"
 )
 
 /*V2RayPoint V2Ray Point Server
