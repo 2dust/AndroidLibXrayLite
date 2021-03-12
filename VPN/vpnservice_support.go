@@ -12,6 +12,8 @@ import (
 
 	"golang.org/x/sys/unix"
 	v2net "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/features/dns"
+	"github.com/xtls/xray-core/features/outbound"
 	v2internet "github.com/xtls/xray-core/transport/internet"
 )
 
@@ -199,6 +201,11 @@ func (d *ProtectedDialer) getFd(network v2net.Network) (fd int, err error) {
 		err = fmt.Errorf("unknow network")
 	}
 	return
+}
+
+// Init implement internet.SystemDialer
+func (d *ProtectedDialer) Init(_ dns.Client, _ outbound.Manager) {
+	// do nothing
 }
 
 // Dial exported as the protected dial method
