@@ -1,4 +1,4 @@
-package VPN
+package libv2ray
 
 import (
 	"context"

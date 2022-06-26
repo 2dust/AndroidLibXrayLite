@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/2dust/AndroidLibXrayLite/VPN"
 	mobasset "golang.org/x/mobile/asset"
 
 	v2core "github.com/xtls/xray-core/core"
@@ -40,7 +39,7 @@ type V2RayPoint struct {
 	SupportSet   V2RayVPNServiceSupportsSet
 	statsManager v2stats.Manager
 
-	dialer    *VPN.ProtectedDialer
+	dialer    *ProtectedDialer
 	v2rayOP   sync.Mutex
 	closeChan chan struct{}
 
@@ -232,7 +231,7 @@ func NewV2RayPoint(s V2RayVPNServiceSupportsSet, adns bool) *V2RayPoint {
 			return v2commlog.NewLogger(createStdoutLogWriter()), nil
 		})
 
-	dialer := VPN.NewPreotectedDialer(s)
+	dialer := NewPreotectedDialer(s)
 	v2internet.UseAlternativeSystemDialer(dialer)
 	return &V2RayPoint{
 		SupportSet:   s,
@@ -241,15 +240,12 @@ func NewV2RayPoint(s V2RayVPNServiceSupportsSet, adns bool) *V2RayPoint {
 	}
 }
 
-func CheckVersion() int {
-	return 23
-}
-
 /*CheckVersionX string
 This func will return libv2ray binding version and V2Ray version used.
 */
 func CheckVersionX() string {
-	return fmt.Sprintf("Lib v%d, Xray-core v%s", CheckVersion(), v2core.Version())
+	var version  = 24
+	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, v2core.Version())
 }
 
 func measureInstDelay(ctx context.Context, inst *v2core.Instance) (int64, error) {
@@ -285,4 +281,27 @@ func measureInstDelay(ctx context.Context, inst *v2core.Instance) (int64, error)
 	}
 	resp.Body.Close()
 	return time.Since(start).Milliseconds(), nil
+}
+
+// This struct creates our own log writer without datatime stamp
+// As Android adds time stamps on each line
+type consoleLogWriter struct {
+	logger *log.Logger
+}
+
+func (w *consoleLogWriter) Write(s string) error {
+	w.logger.Print(s)
+	return nil
+}
+
+func (w *consoleLogWriter) Close() error {
+	return nil
+}
+
+// This logger won't print data/time stamps
+func createStdoutLogWriter() v2commlog.WriterCreator {
+	return func() v2commlog.Writer {
+		return &consoleLogWriter{
+			logger: log.New(os.Stdout, "", 0)}
+	}
 }
