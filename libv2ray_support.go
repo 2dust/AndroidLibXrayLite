@@ -240,9 +240,9 @@ func (d *ProtectedDialer) Dial(ctx context.Context,
 			}
 		}
 
-		if time.Since(d.vServer.lastResolved) > time.Minute*30 {
-			go d.PrepareDomain(Address, nil, d.preferIPv6)
-		}
+		// if time.Since(d.vServer.lastResolved) > time.Minute*30 {
+		// 	go d.PrepareDomain(Address, nil, d.preferIPv6)
+		// }
 
 		fd, err := d.getFd(dest.Network)
 		if err != nil {
