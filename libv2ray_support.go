@@ -289,7 +289,7 @@ func (d *ProtectedDialer) fdConn(ctx context.Context, ip net.IP, port int, fd in
 	sa := &unix.SockaddrInet6{
 		Port: port,
 	}
-	copy(sa.Addr[:], ip)
+	copy(sa.Addr[:], ip.To16())
 
 	if err := unix.Connect(fd, sa); err != nil {
 		log.Printf("fdConn unix.Connect err, Close Fd: %d Err: %v", fd, err)
