@@ -30,6 +30,7 @@ import (
 
 const (
 	v2Asset = "xray.location.asset"
+	xudpBaseKey = "xray.xudp.basekey"
 )
 
 /*V2RayPoint V2Ray Point Server
@@ -180,11 +181,14 @@ func (v *V2RayPoint) MeasureDelay() (int64, error) {
 }
 
 // InitV2Env set v2 asset path
-func InitV2Env(envPath string) {
+func InitV2Env(envPath string, key string) {
 	//Initialize asset API, Since Raymond Will not let notify the asset location inside Process,
 	//We need to set location outside V2Ray
 	if len(envPath) > 0 {
 		os.Setenv(v2Asset, envPath)
+	}
+	if len(key) > 0 {
+		os.Setenv(xudpBaseKey, key)
 	}
 
 	//Now we handle read, fallback to gomobile asset (apk assets)
@@ -248,7 +252,7 @@ func NewV2RayPoint(s V2RayVPNServiceSupportsSet, adns bool) *V2RayPoint {
 This func will return libv2ray binding version and V2Ray version used.
 */
 func CheckVersionX() string {
-	var version  = 24
+	var version  = 25
 	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, v2core.Version())
 }
 
