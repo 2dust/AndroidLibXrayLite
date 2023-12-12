@@ -40,9 +40,6 @@ jobs:
          gomobile init
          go mod tidy
          gomobile bind -v -androidapi 19 -ldflags='-s -w' ./
-    - name: Create zip file
-      run: |
-         zip AndroidLibV2rayLite.zip libv2ray.aar libv2ray-sources.jar
     - name: Upload AndroidLibXrayLite to release
       uses: svenstaro/upload-release-action@v2
       with:
