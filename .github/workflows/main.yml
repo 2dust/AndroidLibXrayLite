@@ -17,8 +17,8 @@ jobs:
     - name: Setup JDK
       uses: actions/setup-java@v4
       with:
-        java-version: '21'
-        distribution: 'temurin'
+        java-version: 17
+        distribution: 'zulu'
         
     - name: Setup Android SDK Tools
       uses: android-actions/setup-android@v3.2.0
