@@ -41,7 +41,6 @@ jobs:
          bash gen_assets.sh download
          cp -v data/*.dat assets/
          gomobile init
-         go get -u
          go mod tidy
          gomobile bind -v -androidapi 19 -ldflags='-s -w' ./
     - name: Upload AndroidLibXrayLite to release
