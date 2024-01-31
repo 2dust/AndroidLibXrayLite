@@ -2,6 +2,10 @@ name: Build
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        required: true
+        type: string
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -47,5 +51,5 @@ jobs:
       uses: svenstaro/upload-release-action@v2
       with:
         file: ./libv2ray*r
-        tag: ${{ github.ref }}
+        tag: ${{ github.event.inputs.release_tag }}
         file_glob: true
