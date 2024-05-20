@@ -13,7 +13,7 @@ jobs:
     - name: Setup Golang
       uses: actions/setup-go@v4
       with:
-        go-version-file: './go.mod'
+        go-version-file: go.mod
   
     - name: Checkout repository
       uses: actions/checkout@v4
