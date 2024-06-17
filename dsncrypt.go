@@ -1,4 +1,4 @@
-package NebulaVPNComponents
+package libv2ray
 
 import (
 	"log"
