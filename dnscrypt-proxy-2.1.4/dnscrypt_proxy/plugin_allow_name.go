@@ -1,14 +1,14 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"time"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -28,14 +28,14 @@ func (plugin *PluginAllowName) Description() string {
 }
 
 func (plugin *PluginAllowName) Init(proxy *Proxy) error {
-	log.Printf("Loading the set of allowed names from [%s]", proxy.allowNameFile)
-	bin, err := ReadTextFile(proxy.allowNameFile)
+	dlog.Noticef("Loading the set of allowed names from [%s]", proxy.allowNameFile)
+	lines, err := ReadTextFile(proxy.allowNameFile)
 	if err != nil {
 		return err
 	}
 	plugin.allWeeklyRanges = proxy.allWeeklyRanges
 	plugin.patternMatcher = NewPatternMatcher()
-	for lineNo, line := range strings.Split(string(bin), "\n") {
+	for lineNo, line := range strings.Split(lines, "\n") {
 		line = TrimAndStripInlineComments(line)
 		if len(line) == 0 {
 			continue
@@ -46,20 +46,20 @@ func (plugin *PluginAllowName) Init(proxy *Proxy) error {
 			line = strings.TrimSpace(parts[0])
 			timeRangeName = strings.TrimSpace(parts[1])
 		} else if len(parts) > 2 {
-			log.Printf("Syntax error in allowed names at line %d -- Unexpected @ character", 1+lineNo)
+			dlog.Errorf("Syntax error in allowed names at line %d -- Unexpected @ character", 1+lineNo)
 			continue
 		}
 		var weeklyRanges *WeeklyRanges
 		if len(timeRangeName) > 0 {
 			weeklyRangesX, ok := (*plugin.allWeeklyRanges)[timeRangeName]
 			if !ok {
-				log.Printf("Time range [%s] not found at line %d", timeRangeName, 1+lineNo)
+				dlog.Errorf("Time range [%s] not found at line %d", timeRangeName, 1+lineNo)
 			} else {
 				weeklyRanges = &weeklyRangesX
 			}
 		}
 		if err := plugin.patternMatcher.Add(line, weeklyRanges, lineNo+1); err != nil {
-			log.Println(err)
+			dlog.Error(err)
 			continue
 		}
 	}
@@ -96,10 +96,14 @@ func (plugin *PluginAllowName) Eval(pluginsState *PluginsState, msg *dns.Msg) er
 		pluginsState.sessionData["whitelisted"] = true
 		if plugin.logger != nil {
 			var clientIPStr string
-			if pluginsState.clientProto == "udp" {
+			switch pluginsState.clientProto {
+			case "udp":
 				clientIPStr = (*pluginsState.clientAddr).(*net.UDPAddr).IP.String()
-			} else {
+			case "tcp", "local_doh":
 				clientIPStr = (*pluginsState.clientAddr).(*net.TCPAddr).IP.String()
+			default:
+				// Ignore internal flow.
+				return nil
 			}
 			var line string
 			if plugin.format == "tsv" {
@@ -111,7 +115,7 @@ func (plugin *PluginAllowName) Eval(pluginsState *PluginsState, msg *dns.Msg) er
 			} else if plugin.format == "ltsv" {
 				line = fmt.Sprintf("time:%d\thost:%s\tqname:%s\tmessage:%s\n", time.Now().Unix(), clientIPStr, StringQuote(qName), StringQuote(reason))
 			} else {
-				log.Fatalf("Unexpected log format: [%s]", plugin.format)
+				dlog.Fatalf("Unexpected log format: [%s]", plugin.format)
 			}
 			if plugin.logger == nil {
 				return errors.New("Log file not initialized")

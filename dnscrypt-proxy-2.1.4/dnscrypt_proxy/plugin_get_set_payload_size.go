@@ -1,4 +1,4 @@
-package dnscrypt_proxy
+package main
 
 import "github.com/miekg/dns"
 

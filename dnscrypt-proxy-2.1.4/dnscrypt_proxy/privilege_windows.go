@@ -1,4 +1,4 @@
-package dnscrypt_proxy
+package main
 
 import "os"
 

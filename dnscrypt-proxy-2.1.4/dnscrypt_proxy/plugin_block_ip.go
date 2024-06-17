@@ -1,15 +1,15 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"time"
 
 	iradix "github.com/hashicorp/go-immutable-radix"
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -29,14 +29,14 @@ func (plugin *PluginBlockIP) Description() string {
 }
 
 func (plugin *PluginBlockIP) Init(proxy *Proxy) error {
-	log.Printf("Loading the set of IP blocking rules from [%s]", proxy.blockIPFile)
-	bin, err := ReadTextFile(proxy.blockIPFile)
+	dlog.Noticef("Loading the set of IP blocking rules from [%s]", proxy.blockIPFile)
+	lines, err := ReadTextFile(proxy.blockIPFile)
 	if err != nil {
 		return err
 	}
 	plugin.blockedPrefixes = iradix.New()
 	plugin.blockedIPs = make(map[string]interface{})
-	for lineNo, line := range strings.Split(string(bin), "\n") {
+	for lineNo, line := range strings.Split(lines, "\n") {
 		line = TrimAndStripInlineComments(line)
 		if len(line) == 0 {
 			continue
@@ -44,7 +44,7 @@ func (plugin *PluginBlockIP) Init(proxy *Proxy) error {
 		ip := net.ParseIP(line)
 		trailingStar := strings.HasSuffix(line, "*")
 		if len(line) < 2 || (ip != nil && trailingStar) {
-			log.Printf("Suspicious IP blocking rule [%s] at line %d", line, lineNo)
+			dlog.Errorf("Suspicious IP blocking rule [%s] at line %d", line, lineNo)
 			continue
 		}
 		if trailingStar {
@@ -54,11 +54,11 @@ func (plugin *PluginBlockIP) Init(proxy *Proxy) error {
 			line = line[:len(line)-1]
 		}
 		if len(line) == 0 {
-			log.Printf("Empty IP blocking rule at line %d", lineNo)
+			dlog.Errorf("Empty IP blocking rule at line %d", lineNo)
 			continue
 		}
 		if strings.Contains(line, "*") {
-			log.Printf("Invalid rule: [%s] - wildcards can only be used as a suffix at line %d", line, lineNo)
+			dlog.Errorf("Invalid rule: [%s] - wildcards can only be used as a suffix at line %d", line, lineNo)
 			continue
 		}
 		line = strings.ToLower(line)
@@ -123,10 +123,14 @@ func (plugin *PluginBlockIP) Eval(pluginsState *PluginsState, msg *dns.Msg) erro
 		if plugin.logger != nil {
 			qName := pluginsState.qName
 			var clientIPStr string
-			if pluginsState.clientProto == "udp" {
+			switch pluginsState.clientProto {
+			case "udp":
 				clientIPStr = (*pluginsState.clientAddr).(*net.UDPAddr).IP.String()
-			} else {
+			case "tcp", "local_doh":
 				clientIPStr = (*pluginsState.clientAddr).(*net.TCPAddr).IP.String()
+			default:
+				// Ignore internal flow.
+				return nil
 			}
 			var line string
 			if plugin.format == "tsv" {
@@ -145,7 +149,7 @@ func (plugin *PluginBlockIP) Eval(pluginsState *PluginsState, msg *dns.Msg) erro
 			} else if plugin.format == "ltsv" {
 				line = fmt.Sprintf("time:%d\thost:%s\tqname:%s\tip:%s\tmessage:%s\n", time.Now().Unix(), clientIPStr, StringQuote(qName), StringQuote(ipStr), StringQuote(reason))
 			} else {
-				log.Fatalf("Unexpected log format: [%s]", plugin.format)
+				dlog.Fatalf("Unexpected log format: [%s]", plugin.format)
 			}
 			if plugin.logger == nil {
 				return errors.New("Log file not initialized")

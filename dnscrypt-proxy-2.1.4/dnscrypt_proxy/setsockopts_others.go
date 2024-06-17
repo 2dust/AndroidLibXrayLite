@@ -1,7 +1,7 @@
 //go:build !freebsd && !openbsd && !windows && !darwin && !linux
 // +build !freebsd,!openbsd,!windows,!darwin,!linux
 
-package dnscrypt_proxy
+package main
 
 import (
 	"net"

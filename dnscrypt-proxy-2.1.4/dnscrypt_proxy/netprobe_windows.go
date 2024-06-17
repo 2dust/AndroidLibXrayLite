@@ -1,8 +1,10 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"net"
 	"time"
+
+	"github.com/jedisct1/dlog"
 )
 
 func NetProbe(proxy *Proxy, address string, timeout int) error {
@@ -14,7 +16,7 @@ func NetProbe(proxy *Proxy, address string, timeout int) error {
 			defer captivePortalHandler.Stop()
 		}
 	} else {
-		log.Println(err)
+		dlog.Critical(err)
 	}
 	remoteUDPAddr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
@@ -38,16 +40,16 @@ func NetProbe(proxy *Proxy, address string, timeout int) error {
 		if err != nil {
 			if !retried {
 				retried = true
-				log.Println("Network not available yet -- waiting...")
+				dlog.Notice("Network not available yet -- waiting...")
 			}
-			log.Println(err)
+			dlog.Debug(err)
 			time.Sleep(1 * time.Second)
 			continue
 		}
 		pc.Close()
-		log.Println("Network connectivity detected")
+		dlog.Notice("Network connectivity detected")
 		return nil
 	}
-	log.Println("Timeout while waiting for network connectivity")
+	dlog.Error("Timeout while waiting for network connectivity")
 	return nil
 }

@@ -1,4 +1,4 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"strings"
@@ -6,8 +6,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-type PluginBlockUnqualified struct {
-}
+type PluginBlockUnqualified struct{}
 
 func (plugin *PluginBlockUnqualified) Name() string {
 	return "block_unqualified"

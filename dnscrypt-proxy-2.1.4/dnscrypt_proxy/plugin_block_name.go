@@ -1,14 +1,14 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"time"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -44,10 +44,14 @@ func (blockedNames *BlockedNames) check(pluginsState *PluginsState, qName string
 	pluginsState.returnCode = PluginsReturnCodeReject
 	if blockedNames.logger != nil {
 		var clientIPStr string
-		if pluginsState.clientProto == "udp" {
+		switch pluginsState.clientProto {
+		case "udp":
 			clientIPStr = (*pluginsState.clientAddr).(*net.UDPAddr).IP.String()
-		} else {
+		case "tcp", "local_doh":
 			clientIPStr = (*pluginsState.clientAddr).(*net.TCPAddr).IP.String()
+		default:
+			// Ignore internal flow.
+			return false, nil
 		}
 		var line string
 		if blockedNames.format == "tsv" {
@@ -59,7 +63,7 @@ func (blockedNames *BlockedNames) check(pluginsState *PluginsState, qName string
 		} else if blockedNames.format == "ltsv" {
 			line = fmt.Sprintf("time:%d\thost:%s\tqname:%s\tmessage:%s\n", time.Now().Unix(), clientIPStr, StringQuote(qName), StringQuote(reason))
 		} else {
-			log.Fatalf("Unexpected log format: [%s]", blockedNames.format)
+			dlog.Fatalf("Unexpected log format: [%s]", blockedNames.format)
 		}
 		if blockedNames.logger == nil {
 			return false, errors.New("Log file not initialized")
@@ -71,8 +75,7 @@ func (blockedNames *BlockedNames) check(pluginsState *PluginsState, qName string
 
 // ---
 
-type PluginBlockName struct {
-}
+type PluginBlockName struct{}
 
 func (plugin *PluginBlockName) Name() string {
 	return "block_name"
@@ -83,8 +86,8 @@ func (plugin *PluginBlockName) Description() string {
 }
 
 func (plugin *PluginBlockName) Init(proxy *Proxy) error {
-	log.Printf("Loading the set of blocking rules from [%s]", proxy.blockNameFile)
-	bin, err := ReadTextFile(proxy.blockNameFile)
+	dlog.Noticef("Loading the set of blocking rules from [%s]", proxy.blockNameFile)
+	lines, err := ReadTextFile(proxy.blockNameFile)
 	if err != nil {
 		return err
 	}
@@ -92,7 +95,7 @@ func (plugin *PluginBlockName) Init(proxy *Proxy) error {
 		allWeeklyRanges: proxy.allWeeklyRanges,
 		patternMatcher:  NewPatternMatcher(),
 	}
-	for lineNo, line := range strings.Split(string(bin), "\n") {
+	for lineNo, line := range strings.Split(lines, "\n") {
 		line = TrimAndStripInlineComments(line)
 		if len(line) == 0 {
 			continue
@@ -103,20 +106,20 @@ func (plugin *PluginBlockName) Init(proxy *Proxy) error {
 			line = strings.TrimSpace(parts[0])
 			timeRangeName = strings.TrimSpace(parts[1])
 		} else if len(parts) > 2 {
-			log.Printf("Syntax error in block rules at line %d -- Unexpected @ character", 1+lineNo)
+			dlog.Errorf("Syntax error in block rules at line %d -- Unexpected @ character", 1+lineNo)
 			continue
 		}
 		var weeklyRanges *WeeklyRanges
 		if len(timeRangeName) > 0 {
 			weeklyRangesX, ok := (*xBlockedNames.allWeeklyRanges)[timeRangeName]
 			if !ok {
-				log.Printf("Time range [%s] not found at line %d", timeRangeName, 1+lineNo)
+				dlog.Errorf("Time range [%s] not found at line %d", timeRangeName, 1+lineNo)
 			} else {
 				weeklyRanges = &weeklyRangesX
 			}
 		}
 		if err := xBlockedNames.patternMatcher.Add(line, weeklyRanges, lineNo+1); err != nil {
-			log.Println(err)
+			dlog.Error(err)
 			continue
 		}
 	}
@@ -148,8 +151,7 @@ func (plugin *PluginBlockName) Eval(pluginsState *PluginsState, msg *dns.Msg) er
 
 // ---
 
-type PluginBlockNameResponse struct {
-}
+type PluginBlockNameResponse struct{}
 
 func (plugin *PluginBlockNameResponse) Name() string {
 	return "block_name"

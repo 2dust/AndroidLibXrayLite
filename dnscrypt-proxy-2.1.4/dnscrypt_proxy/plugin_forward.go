@@ -1,12 +1,12 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"fmt"
-	"log"
 	"math/rand"
 	"net"
 	"strings"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -28,12 +28,12 @@ func (plugin *PluginForward) Description() string {
 }
 
 func (plugin *PluginForward) Init(proxy *Proxy) error {
-	log.Printf("Loading the set of forwarding rules from [%s]", proxy.forwardFile)
-	bin, err := ReadTextFile(proxy.forwardFile)
+	dlog.Noticef("Loading the set of forwarding rules from [%s]", proxy.forwardFile)
+	lines, err := ReadTextFile(proxy.forwardFile)
 	if err != nil {
 		return err
 	}
-	for lineNo, line := range strings.Split(string(bin), "\n") {
+	for lineNo, line := range strings.Split(lines, "\n") {
 		line = TrimAndStripInlineComments(line)
 		if len(line) == 0 {
 			continue
@@ -49,9 +49,16 @@ func (plugin *PluginForward) Init(proxy *Proxy) error {
 		var servers []string
 		for _, server := range strings.Split(serversStr, ",") {
 			server = strings.TrimSpace(server)
-			if net.ParseIP(server) != nil {
-				server = fmt.Sprintf("%s:%d", server, 53)
+			server = strings.TrimPrefix(server, "[")
+			server = strings.TrimSuffix(server, "]")
+			if ip := net.ParseIP(server); ip != nil {
+				if ip.To4() != nil {
+					server = fmt.Sprintf("%s:%d", server, 53)
+				} else {
+					server = fmt.Sprintf("[%s]:%d", server, 53)
+				}
 			}
+			dlog.Infof("Forwarding [%s] to %s", domain, server)
 			servers = append(servers, server)
 		}
 		if len(servers) == 0 {
@@ -82,8 +89,9 @@ func (plugin *PluginForward) Eval(pluginsState *PluginsState, msg *dns.Msg) erro
 		if candidateLen > qNameLen {
 			continue
 		}
-		if qName[qNameLen-candidateLen:] == candidate.domain &&
-			(candidateLen == qNameLen || (qName[qNameLen-candidateLen-1] == '.')) {
+		if (qName[qNameLen-candidateLen:] == candidate.domain &&
+			(candidateLen == qNameLen || (qName[qNameLen-candidateLen-1] == '.'))) ||
+			(candidate.domain == ".") {
 			servers = candidate.servers
 			break
 		}

@@ -1,8 +1,7 @@
-package dnscrypt_proxy
+package main
 
 import (
-	"log"
-
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -20,7 +19,7 @@ func (plugin *PluginCaptivePortal) Description() string {
 
 func (plugin *PluginCaptivePortal) Init(proxy *Proxy) error {
 	plugin.captivePortalMap = proxy.captivePortalMap
-	log.Println("Captive portals handler enabled")
+	dlog.Notice("Captive portals handler enabled")
 	return nil
 }
 

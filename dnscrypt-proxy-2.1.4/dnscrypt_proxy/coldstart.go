@@ -1,12 +1,13 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -15,17 +16,13 @@ type CaptivePortalEntryIPs []net.IP
 type CaptivePortalMap map[string]CaptivePortalEntryIPs
 
 type CaptivePortalHandler struct {
+	wg            sync.WaitGroup
 	cancelChannel chan struct{}
-	countChannel  chan struct{}
-	channelCount  int
 }
 
 func (captivePortalHandler *CaptivePortalHandler) Stop() {
 	close(captivePortalHandler.cancelChannel)
-	for len(captivePortalHandler.countChannel) < captivePortalHandler.channelCount {
-		time.Sleep(time.Millisecond)
-	}
-	close(captivePortalHandler.countChannel)
+	captivePortalHandler.wg.Wait()
 }
 
 func (ipsMap *CaptivePortalMap) GetEntry(msg *dns.Msg) (*dns.Question, *CaptivePortalEntryIPs) {
@@ -76,7 +73,7 @@ func HandleCaptivePortalQuery(msg *dns.Msg, question *dns.Question, ips *Captive
 	if !ok {
 		qType = fmt.Sprint(question.Qtype)
 	}
-	log.Printf("Query for captive portal detection: [%v] (%v)", question.Name, qType)
+	dlog.Infof("Query for captive portal detection: [%v] (%v)", question.Name, qType)
 	return respMsg
 }
 
@@ -97,7 +94,7 @@ func handleColdStartClient(clientPc *net.UDPConn, cancelChannel chan struct{}, i
 		return false
 	}
 	if err != nil {
-		log.Println(err)
+		dlog.Warn(err)
 		return true
 	}
 	packet := buffer[:length]
@@ -120,24 +117,29 @@ func handleColdStartClient(clientPc *net.UDPConn, cancelChannel chan struct{}, i
 }
 
 func addColdStartListener(
-	proxy *Proxy,
 	ipsMap *CaptivePortalMap,
 	listenAddrStr string,
 	captivePortalHandler *CaptivePortalHandler,
 ) error {
-	listenUDPAddr, err := net.ResolveUDPAddr("udp", listenAddrStr)
+	network := "udp"
+	isIPv4 := isDigit(listenAddrStr[0])
+	if isIPv4 {
+		network = "udp4"
+	}
+	listenUDPAddr, err := net.ResolveUDPAddr(network, listenAddrStr)
 	if err != nil {
 		return err
 	}
-	clientPc, err := net.ListenUDP("udp", listenUDPAddr)
+	clientPc, err := net.ListenUDP(network, listenUDPAddr)
 	if err != nil {
 		return err
 	}
+	captivePortalHandler.wg.Add(1)
 	go func() {
 		for !handleColdStartClient(clientPc, captivePortalHandler.cancelChannel, ipsMap) {
 		}
 		clientPc.Close()
-		captivePortalHandler.countChannel <- struct{}{}
+		captivePortalHandler.wg.Done()
 	}()
 	return nil
 }
@@ -146,13 +148,13 @@ func ColdStart(proxy *Proxy) (*CaptivePortalHandler, error) {
 	if len(proxy.captivePortalMapFile) == 0 {
 		return nil, nil
 	}
-	bin, err := ReadTextFile(proxy.captivePortalMapFile)
+	lines, err := ReadTextFile(proxy.captivePortalMapFile)
 	if err != nil {
-		log.Println(err)
+		dlog.Warn(err)
 		return nil, err
 	}
 	ipsMap := make(CaptivePortalMap)
-	for lineNo, line := range strings.Split(string(bin), "\n") {
+	for lineNo, line := range strings.Split(lines, "\n") {
 		line = TrimAndStripInlineComments(line)
 		if len(line) == 0 {
 			continue
@@ -185,14 +187,17 @@ func ColdStart(proxy *Proxy) (*CaptivePortalHandler, error) {
 	listenAddrStrs := proxy.listenAddresses
 	captivePortalHandler := CaptivePortalHandler{
 		cancelChannel: make(chan struct{}),
-		countChannel:  make(chan struct{}, len(listenAddrStrs)),
-		channelCount:  0,
 	}
+	ok := false
 	for _, listenAddrStr := range listenAddrStrs {
-		if err := addColdStartListener(proxy, &ipsMap, listenAddrStr, &captivePortalHandler); err == nil {
-			captivePortalHandler.channelCount++
+		err = addColdStartListener(&ipsMap, listenAddrStr, &captivePortalHandler)
+		if err == nil {
+			ok = true
 		}
 	}
+	if ok {
+		err = nil
+	}
 	proxy.captivePortalMap = &ipsMap
-	return &captivePortalHandler, nil
+	return &captivePortalHandler, err
 }

@@ -1,7 +1,6 @@
-package dnscrypt_proxy
+package main
 
 import (
-	"log"
 	"math/rand"
 	"net"
 	"strings"
@@ -9,6 +8,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -38,8 +38,8 @@ func (plugin *PluginCloak) Description() string {
 }
 
 func (plugin *PluginCloak) Init(proxy *Proxy) error {
-	log.Printf("Loading the set of cloaking rules from [%s]", proxy.cloakFile)
-	bin, err := ReadTextFile(proxy.cloakFile)
+	dlog.Noticef("Loading the set of cloaking rules from [%s]", proxy.cloakFile)
+	lines, err := ReadTextFile(proxy.cloakFile)
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func (plugin *PluginCloak) Init(proxy *Proxy) error {
 	plugin.createPTR = proxy.cloakedPTR
 	plugin.patternMatcher = NewPatternMatcher()
 	cloakedNames := make(map[string]*CloakedName)
-	for lineNo, line := range strings.Split(string(bin), "\n") {
+	for lineNo, line := range strings.Split(lines, "\n") {
 		line = TrimAndStripInlineComments(line)
 		if len(line) == 0 {
 			continue
@@ -58,11 +58,11 @@ func (plugin *PluginCloak) Init(proxy *Proxy) error {
 			line = strings.TrimSpace(parts[0])
 			target = strings.TrimSpace(parts[1])
 		} else if len(parts) > 2 {
-			log.Printf("Syntax error in cloaking rules at line %d -- Unexpected space character", 1+lineNo)
+			dlog.Errorf("Syntax error in cloaking rules at line %d -- Unexpected space character", 1+lineNo)
 			continue
 		}
 		if len(line) == 0 || len(target) == 0 {
-			log.Printf("Syntax error in cloaking rules at line %d -- Missing name or target", 1+lineNo)
+			dlog.Errorf("Syntax error in cloaking rules at line %d -- Missing name or target", 1+lineNo)
 			continue
 		}
 		line = strings.ToLower(line)
@@ -73,11 +73,11 @@ func (plugin *PluginCloak) Init(proxy *Proxy) error {
 		ip := net.ParseIP(target)
 		if ip != nil {
 			if ipv4 := ip.To4(); ipv4 != nil {
-				cloakedName.ipv4 = append((*cloakedName).ipv4, ipv4)
+				cloakedName.ipv4 = append(cloakedName.ipv4, ipv4)
 			} else if ipv6 := ip.To16(); ipv6 != nil {
-				cloakedName.ipv6 = append((*cloakedName).ipv6, ipv6)
+				cloakedName.ipv6 = append(cloakedName.ipv6, ipv6)
 			} else {
-				log.Printf("Invalid IP address in cloaking rule at line %d", 1+lineNo)
+				dlog.Errorf("Invalid IP address in cloaking rule at line %d", 1+lineNo)
 				continue
 			}
 			cloakedName.isIP = true

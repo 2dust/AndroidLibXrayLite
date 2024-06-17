@@ -1,13 +1,12 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"bytes"
 	crypto_rand "crypto/rand"
 	"crypto/sha512"
 	"errors"
-	"log"
-	"math/rand"
 
+	"github.com/jedisct1/dlog"
 	"github.com/jedisct1/xsecretbox"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/box"
@@ -55,7 +54,7 @@ func ComputeSharedKey(
 		var err error
 		sharedKey, err = xsecretbox.SharedKey(*secretKey, *serverPk)
 		if err != nil {
-			log.Printf("[%v] Weak XChaCha20 public key", providerName)
+			dlog.Criticalf("[%v] Weak XChaCha20 public key", providerName)
 		}
 	} else {
 		box.Precompute(&sharedKey, serverPk, secretKey)
@@ -64,9 +63,9 @@ func ComputeSharedKey(
 			c |= sharedKey[i]
 		}
 		if c == 0 {
-			log.Printf("[%v] Weak XSalsa20 public key", providerName)
+			dlog.Criticalf("[%v] Weak XSalsa20 public key", providerName)
 			if _, err := crypto_rand.Read(sharedKey[:]); err != nil {
-				log.Fatal(err)
+				dlog.Fatal(err)
 			}
 		}
 	}
@@ -79,7 +78,9 @@ func (proxy *Proxy) Encrypt(
 	proto string,
 ) (sharedKey *[32]byte, encrypted []byte, clientNonce []byte, err error) {
 	nonce, clientNonce := make([]byte, NonceSize), make([]byte, HalfNonceSize)
-	crypto_rand.Read(clientNonce)
+	if _, err := crypto_rand.Read(clientNonce); err != nil {
+		return nil, nil, nil, err
+	}
 	copy(nonce, clientNonce)
 	var publicKey *[PublicKeySize]byte
 	if proxy.ephemeralKeys {
@@ -102,7 +103,9 @@ func (proxy *Proxy) Encrypt(
 		minQuestionSize = Max(proxy.questionSizeEstimator.MinQuestionSize(), minQuestionSize)
 	} else {
 		var xpad [1]byte
-		rand.Read(xpad[:])
+		if _, err := crypto_rand.Read(xpad[:]); err != nil {
+			return nil, nil, nil, err
+		}
 		minQuestionSize += int(xpad[0])
 	}
 	paddedLength := Min(MaxDNSUDPPacketSize, (Max(minQuestionSize, QueryOverhead)+1+63) & ^63)

@@ -1,12 +1,13 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
 	"github.com/k-sone/critbitgo"
+
+	"github.com/jedisct1/dlog"
 )
 
 type PatternType int
@@ -87,7 +88,7 @@ func (patternMatcher *PatternMatcher) Add(pattern string, val interface{}, posit
 		pattern = strings.TrimPrefix(pattern, ".")
 	}
 	if len(pattern) == 0 {
-		log.Printf("Syntax error in block rule at line %d", position)
+		dlog.Errorf("Syntax error in block rule at line %d", position)
 	}
 
 	pattern = strings.ToLower(pattern)
@@ -109,7 +110,7 @@ func (patternMatcher *PatternMatcher) Add(pattern string, val interface{}, posit
 	case PatternTypeExact:
 		patternMatcher.blockedExact[pattern] = val
 	default:
-		log.Fatal("Unexpected block type")
+		dlog.Fatal("Unexpected block type")
 	}
 	return nil
 }

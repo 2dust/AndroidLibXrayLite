@@ -1,15 +1,15 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -20,7 +20,7 @@ type localDoHHandler struct {
 func (handler localDoHHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	proxy := handler.proxy
 	if !proxy.clientsCountInc() {
-		log.Printf("Too many incoming connections (max=%d)", proxy.maxClients)
+		dlog.Warnf("Too many incoming connections (max=%d)", proxy.maxClients)
 		return
 	}
 	defer proxy.clientsCountDec()
@@ -37,7 +37,7 @@ func (handler localDoHHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		request.Header.Get("Content-Type") == dataType {
 		packet, err = io.ReadAll(io.LimitReader(request.Body, int64(MaxDNSPacketSize)))
 		if err != nil {
-			log.Printf("No body in a local DoH query")
+			dlog.Warnf("No body in a local DoH query")
 			return
 		}
 	} else if request.Method == "GET" && request.Header.Get("Accept") == dataType {
@@ -45,7 +45,7 @@ func (handler localDoHHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		if len(encodedPacket) >= MinDNSPacketSize*4/3 && len(encodedPacket) <= MaxDNSPacketSize*4/3 {
 			packet, err = base64.RawURLEncoding.DecodeString(encodedPacket)
 			if err != nil {
-				log.Printf("Invalid base64 in a local DoH query")
+				dlog.Warnf("Invalid base64 in a local DoH query")
 				return
 			}
 		}
@@ -58,7 +58,7 @@ func (handler localDoHHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 	}
 	clientAddr, err := net.ResolveTCPAddr("tcp", request.RemoteAddr)
 	if err != nil {
-		log.Printf("Unable to get the client address: [%v]", err)
+		dlog.Errorf("Unable to get the client address: [%v]", err)
 		return
 	}
 	xClientAddr := net.Addr(clientAddr)
@@ -83,7 +83,7 @@ func (handler localDoHHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 	if hasEDNS0Padding {
 		response, err = addEDNS0PaddingIfNoneFound(&msg, response, padLen)
 		if err != nil {
-			log.Println(err)
+			dlog.Critical(err)
 			return
 		}
 	} else {
@@ -99,7 +99,7 @@ func (handler localDoHHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 func (proxy *Proxy) localDoHListener(acceptPc *net.TCPListener) {
 	defer acceptPc.Close()
 	if len(proxy.localDoHCertFile) == 0 || len(proxy.localDoHCertKeyFile) == 0 {
-		log.Fatal("A certificate and a key are required to start a local DoH service")
+		dlog.Fatal("A certificate and a key are required to start a local DoH service")
 	}
 	httpServer := &http.Server{
 		ReadTimeout:  proxy.timeout,
@@ -108,7 +108,7 @@ func (proxy *Proxy) localDoHListener(acceptPc *net.TCPListener) {
 	}
 	httpServer.SetKeepAlivesEnabled(true)
 	if err := httpServer.ServeTLS(acceptPc, proxy.localDoHCertFile, proxy.localDoHCertKeyFile); err != nil {
-		log.Fatal(err)
+		dlog.Fatal(err)
 	}
 }
 

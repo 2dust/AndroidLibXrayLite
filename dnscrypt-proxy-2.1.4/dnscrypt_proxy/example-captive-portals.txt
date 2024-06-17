@@ -1,0 +1,27 @@
+###########################################
+#        Captive portal test names        #
+###########################################
+
+## Some operating systems send queries to these names after a network change,
+## in order to check if connectivity beyond the router is possible without
+## going through a captive portal.
+##
+## This is a list of hard-coded IP addresses that will be returned when queries
+## for these names are received, even before the operating system reports an interface
+## as usable for reaching the Internet.
+##
+## Note that IPv6 addresses don't need to be specified within brackets,
+## as there are no port numbers.
+
+captive.apple.com               17.253.109.201, 17.253.113.202
+connectivitycheck.gstatic.com   64.233.162.94, 64.233.164.94, 64.233.165.94, 64.233.177.94, 64.233.185.94, 74.125.132.94, 74.125.136.94, 74.125.20.94, 74.125.21.94, 74.125.28.94
+connectivitycheck.android.com   64.233.162.100, 64.233.162.101, 64.233.162.102, 64.233.162.113, 64.233.162.138, 64.233.162.139
+www.msftncsi.com                2.16.106.89, 2.16.106.91, 23.0.175.137, 23.0.175.146, 23.192.47.155, 23.192.47.203, 23.199.63.160, 23.199.63.184, 23.199.63.208, 23.204.146.160, 23.204.146.163, 23.46.238.243, 23.46.239.24, 23.48.39.16, 23.48.39.48, 23.55.38.139, 23.55.38.146, 23.59.190.185, 23.59.190.195
+dns.msftncsi.com                131.107.255.255, fd3e:4f5a:5b81::1
+www.msftconnecttest.com         13.107.4.52
+ipv6.msftconnecttest.com        2a01:111:2003::52
+ipv4only.arpa                   192.0.0.170, 192.0.0.171
+
+## Adding IP addresses of NTP servers is also a good idea
+
+time.google.com                 216.239.35.0, 2001:4860:4806::

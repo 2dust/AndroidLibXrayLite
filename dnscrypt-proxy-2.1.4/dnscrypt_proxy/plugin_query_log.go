@@ -1,14 +1,14 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"time"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -43,6 +43,16 @@ func (plugin *PluginQueryLog) Reload() error {
 }
 
 func (plugin *PluginQueryLog) Eval(pluginsState *PluginsState, msg *dns.Msg) error {
+	var clientIPStr string
+	switch pluginsState.clientProto {
+	case "udp":
+		clientIPStr = (*pluginsState.clientAddr).(*net.UDPAddr).IP.String()
+	case "tcp", "local_doh":
+		clientIPStr = (*pluginsState.clientAddr).(*net.TCPAddr).IP.String()
+	default:
+		// Ignore internal flow.
+		return nil
+	}
 	question := msg.Question[0]
 	qType, ok := dns.TypeToString[question.Qtype]
 	if !ok {
@@ -54,12 +64,6 @@ func (plugin *PluginQueryLog) Eval(pluginsState *PluginsState, msg *dns.Msg) err
 				return nil
 			}
 		}
-	}
-	var clientIPStr string
-	if pluginsState.clientProto == "udp" {
-		clientIPStr = (*pluginsState.clientAddr).(*net.UDPAddr).IP.String()
-	} else {
-		clientIPStr = (*pluginsState.clientAddr).(*net.TCPAddr).IP.String()
 	}
 	qName := pluginsState.qName
 
@@ -104,7 +108,7 @@ func (plugin *PluginQueryLog) Eval(pluginsState *PluginsState, msg *dns.Msg) err
 		line = fmt.Sprintf("time:%d\thost:%s\tmessage:%s\ttype:%s\treturn:%s\tcached:%d\tduration:%d\tserver:%s\n",
 			time.Now().Unix(), clientIPStr, StringQuote(qName), qType, returnCode, cached, requestDuration/time.Millisecond, StringQuote(pluginsState.serverName))
 	} else {
-		log.Fatalf("Unexpected log format: [%s]", plugin.format)
+		dlog.Fatalf("Unexpected log format: [%s]", plugin.format)
 	}
 	if plugin.logger == nil {
 		return errors.New("Log file not initialized")

@@ -1,12 +1,12 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"errors"
-	"log"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -49,7 +49,7 @@ func (plugin *PluginDNS64) Init(proxy *Proxy) error {
 			if err != nil {
 				return err
 			}
-			log.Printf("Registered DNS64 prefix [%s]", pref.String())
+			dlog.Noticef("Registered DNS64 prefix [%s]", pref.String())
 			plugin.pref64 = append(plugin.pref64, pref)
 		}
 	} else if len(proxy.dns64Resolvers) != 0 {
@@ -57,7 +57,10 @@ func (plugin *PluginDNS64) Init(proxy *Proxy) error {
 		if err := plugin.refreshPref64(); err != nil {
 			return err
 		}
+	} else {
+		return nil
 	}
+	dlog.Notice("DNS64 map enabled")
 
 	return nil
 }
@@ -105,7 +108,7 @@ func (plugin *PluginDNS64) Eval(pluginsState *PluginsState, msg *dns.Msg) error 
 		return err
 	}
 
-	if err != nil || resp.Rcode != dns.RcodeSuccess {
+	if resp.Rcode != dns.RcodeSuccess {
 		return nil
 	}
 
@@ -152,11 +155,10 @@ func (plugin *PluginDNS64) Eval(pluginsState *PluginsState, msg *dns.Msg) error 
 		}
 	}
 
-	synth := EmptyResponseFromMessage(msg)
-	synth.Answer = append(synth.Answer, synth64...)
+	msg.Answer = synth64
+	msg.AuthenticatedData = false
+	msg.SetEdns0(uint16(MaxDNSUDPSafePacketSize), false)
 
-	pluginsState.synthResponse = synth
-	pluginsState.action = PluginsActionSynth
 	pluginsState.returnCode = PluginsReturnCodeCloak
 
 	return nil
@@ -191,7 +193,6 @@ func (plugin *PluginDNS64) fetchPref64(resolver string) error {
 
 	client := new(dns.Client)
 	resp, _, err := client.Exchange(msg, resolver)
-
 	if err != nil {
 		return err
 	}
@@ -209,17 +210,17 @@ func (plugin *PluginDNS64) fetchPref64(resolver string) error {
 				prefEnd := 0
 
 				if wka := net.IPv4(ipv6[12], ipv6[13], ipv6[14], ipv6[15]); wka.Equal(rfc7050WKA1) ||
-					wka.Equal(rfc7050WKA2) { //96
+					wka.Equal(rfc7050WKA2) { // 96
 					prefEnd = 12
-				} else if wka := net.IPv4(ipv6[9], ipv6[10], ipv6[11], ipv6[12]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { //64
+				} else if wka := net.IPv4(ipv6[9], ipv6[10], ipv6[11], ipv6[12]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { // 64
 					prefEnd = 8
-				} else if wka := net.IPv4(ipv6[7], ipv6[9], ipv6[10], ipv6[11]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { //56
+				} else if wka := net.IPv4(ipv6[7], ipv6[9], ipv6[10], ipv6[11]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { // 56
 					prefEnd = 7
-				} else if wka := net.IPv4(ipv6[6], ipv6[7], ipv6[9], ipv6[10]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { //48
+				} else if wka := net.IPv4(ipv6[6], ipv6[7], ipv6[9], ipv6[10]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { // 48
 					prefEnd = 6
-				} else if wka := net.IPv4(ipv6[5], ipv6[6], ipv6[7], ipv6[9]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { //40
+				} else if wka := net.IPv4(ipv6[5], ipv6[6], ipv6[7], ipv6[9]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { // 40
 					prefEnd = 5
-				} else if wka := net.IPv4(ipv6[4], ipv6[5], ipv6[6], ipv6[7]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { //32
+				} else if wka := net.IPv4(ipv6[4], ipv6[5], ipv6[6], ipv6[7]); wka.Equal(rfc7050WKA1) || wka.Equal(rfc7050WKA2) { // 32
 					prefEnd = 4
 				}
 
@@ -230,7 +231,7 @@ func (plugin *PluginDNS64) fetchPref64(resolver string) error {
 					if _, ok := uniqPrefixes[prefix.String()]; !ok {
 						prefixes = append(prefixes, prefix)
 						uniqPrefixes[prefix.String()] = struct{}{}
-						log.Printf("Registered DNS64 prefix [%s]", prefix.String())
+						dlog.Infof("Registered DNS64 prefix [%s]", prefix.String())
 					}
 				}
 			}

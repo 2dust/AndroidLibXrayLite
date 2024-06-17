@@ -1,10 +1,10 @@
-package dnscrypt_proxy
+package main
 
 import (
-	"log"
 	"math/rand"
 	"net"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -22,7 +22,7 @@ func (plugin *PluginECS) Description() string {
 
 func (plugin *PluginECS) Init(proxy *Proxy) error {
 	plugin.nets = proxy.ednsClientSubnets
-	log.Println("ECS plugin enabled")
+	dlog.Notice("ECS plugin enabled")
 	return nil
 }
 

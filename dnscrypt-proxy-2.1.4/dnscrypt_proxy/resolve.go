@@ -1,4 +1,4 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"errors"
@@ -11,8 +11,10 @@ import (
 	"github.com/miekg/dns"
 )
 
-const myResolverHost string = "resolver.dnscrypt.info."
-const nonexistentName string = "nonexistent-zone.dnscrypt-test."
+const (
+	myResolverHost  string = "resolver.dnscrypt.info."
+	nonexistentName string = "nonexistent-zone.dnscrypt-test."
+)
 
 func resolveQuery(server string, qName string, qType uint16, sendClientSubnet bool) (*dns.Msg, error) {
 	client := new(dns.Client)
@@ -139,6 +141,7 @@ func Resolve(server string, name string, singleResolver bool) {
 			fmt.Printf("Lying         : ")
 			response, err := resolveQuery(server, nonexistentName, dns.TypeA, false)
 			if err != nil {
+				fmt.Printf("[%v]", err)
 				break
 			}
 			if response.Rcode == dns.RcodeSuccess {

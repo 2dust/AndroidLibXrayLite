@@ -1,4 +1,4 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"github.com/k-sone/critbitgo"
@@ -119,9 +119,11 @@ var undelegatedSet = []string{
 	"envoy",
 	"example",
 	"f.f.ip6.arpa",
+	"fritz.box",
 	"grp",
 	"gw==",
 	"home",
+	"home.arpa",
 	"hub",
 	"internal",
 	"intra",
@@ -134,6 +136,7 @@ var undelegatedSet = []string{
 	"localdomain",
 	"localhost",
 	"localnet",
+	"mail",
 	"modem",
 	"mynet",
 	"myrouter",

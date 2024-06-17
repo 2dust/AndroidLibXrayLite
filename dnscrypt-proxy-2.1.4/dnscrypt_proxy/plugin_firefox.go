@@ -1,16 +1,15 @@
 // Work around Mozilla's evil plan - https://sk.tl/3Ek6tzhq
 
-package dnscrypt_proxy
+package main
 
 import (
-	"log"
 	"strings"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
-type PluginFirefox struct {
-}
+type PluginFirefox struct{}
 
 func (plugin *PluginFirefox) Name() string {
 	return "firefox"
@@ -21,7 +20,7 @@ func (plugin *PluginFirefox) Description() string {
 }
 
 func (plugin *PluginFirefox) Init(proxy *Proxy) error {
-	log.Printf("Firefox workaround initialized")
+	dlog.Noticef("Firefox workaround initialized")
 	return nil
 }
 

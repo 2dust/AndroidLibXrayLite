@@ -1,11 +1,11 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
-	"log"
 
+	"github.com/jedisct1/dlog"
 	hpkecompact "github.com/jedisct1/go-hpke-compact"
 )
 
@@ -81,7 +81,7 @@ func parseODoHTargetConfigs(configs []byte) ([]ODoHTargetConfig, error) {
 		configLength := binary.BigEndian.Uint16(configs[offset+2 : offset+4])
 		if configVersion == odohVersion || configVersion == odohTestVersion {
 			if configVersion != odohVersion {
-				log.Printf("Server still uses the legacy 0x%x ODoH version", configVersion)
+				dlog.Debugf("Server still uses the legacy 0x%x ODoH version", configVersion)
 			}
 			target, err := parseODoHTargetConfig(configs[offset+4 : offset+4+int(configLength)])
 			if err == nil {
@@ -181,7 +181,7 @@ func (q ODoHQuery) decryptResponse(response []byte) ([]byte, error) {
 	responseLength := binary.BigEndian.Uint16(responsePlaintext[0:2])
 	valid := 1
 	for i := 4 + int(responseLength); i < len(responsePlaintext); i++ {
-		valid = valid & subtle.ConstantTimeByteEq(response[i], 0x00)
+		valid &= subtle.ConstantTimeByteEq(response[i], 0x00)
 	}
 	if valid != 1 {
 		return nil, fmt.Errorf("Malformed response")

@@ -1,7 +1,7 @@
 //go:build !linux
 // +build !linux
 
-package dnscrypt_proxy
+package main
 
 func (proxy *Proxy) addSystemDListeners() error {
 	return nil

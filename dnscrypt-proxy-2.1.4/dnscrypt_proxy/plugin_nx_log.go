@@ -1,13 +1,13 @@
-package dnscrypt_proxy
+package main
 
 import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
 
+	"github.com/jedisct1/dlog"
 	"github.com/miekg/dns"
 )
 
@@ -43,16 +43,20 @@ func (plugin *PluginNxLog) Eval(pluginsState *PluginsState, msg *dns.Msg) error 
 	if msg.Rcode != dns.RcodeNameError {
 		return nil
 	}
+	var clientIPStr string
+	switch pluginsState.clientProto {
+	case "udp":
+		clientIPStr = (*pluginsState.clientAddr).(*net.UDPAddr).IP.String()
+	case "tcp", "local_doh":
+		clientIPStr = (*pluginsState.clientAddr).(*net.TCPAddr).IP.String()
+	default:
+		// Ignore internal flow.
+		return nil
+	}
 	question := msg.Question[0]
 	qType, ok := dns.TypeToString[question.Qtype]
 	if !ok {
 		qType = string(qType)
-	}
-	var clientIPStr string
-	if pluginsState.clientProto == "udp" {
-		clientIPStr = (*pluginsState.clientAddr).(*net.UDPAddr).IP.String()
-	} else {
-		clientIPStr = (*pluginsState.clientAddr).(*net.TCPAddr).IP.String()
 	}
 	qName := pluginsState.qName
 
@@ -67,7 +71,7 @@ func (plugin *PluginNxLog) Eval(pluginsState *PluginsState, msg *dns.Msg) error 
 		line = fmt.Sprintf("time:%d\thost:%s\tmessage:%s\ttype:%s\n",
 			time.Now().Unix(), clientIPStr, StringQuote(qName), qType)
 	} else {
-		log.Fatalf("Unexpected log format: [%s]", plugin.format)
+		dlog.Fatalf("Unexpected log format: [%s]", plugin.format)
 	}
 	if plugin.logger == nil {
 		return errors.New("Log file not initialized")
