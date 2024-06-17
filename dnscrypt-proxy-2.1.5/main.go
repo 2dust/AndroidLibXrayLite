@@ -16,10 +16,11 @@ import (
 )
 
 type App struct {
-	wg    sync.WaitGroup
-	quit  chan struct{}
-	proxy *dnscrypt_lib.Proxy
-	flags *dnscrypt_lib.ConfigFlags
+	wg        sync.WaitGroup
+	quit      chan struct{}
+	proxy     *dnscrypt_lib.Proxy
+	flags     *dnscrypt_lib.ConfigFlags
+	configStr string
 }
 
 func main() {
@@ -62,7 +63,8 @@ func main() {
 	}
 
 	app := &App{
-		flags: &flags,
+		flags:     &flags,
+		configStr: "",
 	}
 
 	svcConfig := &service.Config{
@@ -121,14 +123,14 @@ func (app *App) Start(service service.Service) error {
 }
 
 func (app *App) AppMain() {
-	if err := dnscrypt_lib.ConfigLoad(app.proxy, app.flags, ""); err != nil {
-		dlog.Fatal(err)
+	if err := dnscrypt_lib.ConfigLoad(app.proxy, app.flags, app.configStr); err != nil {
+		dlog.Fatalf("1 error: %q", err)
 	}
 	if err := dnscrypt_lib.PidFileCreate(); err != nil {
 		dlog.Errorf("Unable to create the PID file: [%v]", err)
 	}
 	if err := app.proxy.InitPluginsGlobals(); err != nil {
-		dlog.Fatal(err)
+		dlog.Fatalf("2 error: %q", err)
 	}
 	app.quit = make(chan struct{})
 	app.wg.Add(1)

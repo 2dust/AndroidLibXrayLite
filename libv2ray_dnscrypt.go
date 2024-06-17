@@ -79,8 +79,8 @@ func helper(configStr string) {
 	}
 
 	app := &App{
-	    configStr: configStr,
-		flags: &flags,
+		configStr: configStr,
+		flags:     &flags,
 	}
 
 	svcConfig := &service.Config{

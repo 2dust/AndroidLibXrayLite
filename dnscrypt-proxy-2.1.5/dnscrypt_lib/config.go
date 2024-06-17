@@ -316,15 +316,15 @@ func findConfigFile(configFile *string) (string, error) {
 }
 
 func ConfigLoad(proxy *Proxy, flags *ConfigFlags, configStr string) error {
-	foundConfigFile, err := findConfigFile(flags.ConfigFile)
-	if err != nil {
-		return fmt.Errorf(
-			"Unable to load the configuration file [%s] -- Maybe use the -config command-line switch?",
-			*flags.ConfigFile,
-		)
-	}
+	// foundConfigFile, err := findConfigFile(flags.ConfigFile)
+	// if err != nil {
+	// 	return fmt.Errorf(
+	// 		"Unable to load the configuration file [%s] -- Maybe use the -config command-line switch?",
+	// 		*flags.ConfigFile,
+	// 	)
+	// }
 	config := newConfig()
-	md, err := toml.DecodeFile(configStr, &config)
+	md, err := toml.Decode(configStr, &config)
 	if err != nil {
 		return err
 	}
@@ -338,9 +338,9 @@ func ConfigLoad(proxy *Proxy, flags *ConfigFlags, configStr string) error {
 		os.Exit(0)
 	}
 
-	if err := cdFileDir(foundConfigFile); err != nil {
-		return err
-	}
+	// if err := cdFileDir(foundConfigFile); err != nil {
+	// 	return err
+	// }
 	if config.LogLevel >= 0 && config.LogLevel < int(dlog.SeverityLast) {
 		dlog.SetLogLevel(dlog.Severity(config.LogLevel))
 	}
