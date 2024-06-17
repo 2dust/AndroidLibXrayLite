@@ -43,8 +43,10 @@ func Start(config string) (*ProxyServer, error) {
 	rand.Seed(int64(binary.LittleEndian.Uint64(seed[:])))
 
 	var proxy *dnscrypt_proxy.Proxy = dnscrypt_proxy.NewProxy()
-
-	if err := dnscrypt_proxy.ConfigLoad(proxy, config); err != nil {
+    configFlags := ConfigFlags{
+          ConfigFile: config
+       }
+	if err := dnscrypt_proxy.ConfigLoad(proxy, configFlags); err != nil {
 		return nil, err
 	}
 	// if err := dnscrypt_proxy.PidFileCreate(); err != nil {
