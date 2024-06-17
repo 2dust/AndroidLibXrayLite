@@ -1,4 +1,4 @@
-package main
+package dnscrypt_proxy
 
 import (
 	"fmt"

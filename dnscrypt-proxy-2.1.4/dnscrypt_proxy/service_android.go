@@ -1,7 +1,7 @@
 //go:build android
 // +build android
 
-package main
+package dnscrypt_proxy
 
 func ServiceManagerStartNotify() error {
 	return nil

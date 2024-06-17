@@ -1,6 +1,6 @@
 // Work around Mozilla's evil plan - https://sk.tl/3Ek6tzhq
 
-package main
+package dnscrypt_proxy
 
 import (
 	"strings"
