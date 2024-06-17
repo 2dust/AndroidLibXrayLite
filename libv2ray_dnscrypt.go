@@ -56,7 +56,7 @@ func helper(configStr string) {
 	emptyStr := ""
 	falseBool := false
 	timeout := 60
-	configName := "config.yml"
+	configName := configStr
 
 	svcFlag := &emptyStr
 	version := &falseBool
