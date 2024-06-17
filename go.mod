@@ -38,8 +38,10 @@ require (
 	github.com/onsi/ginkgo/v2 v2.16.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pires/go-proxyproto v0.7.0 // indirect
-	github.com/quic-go/qpack v0.4.0 // indirect
-	github.com/quic-go/quic-go v0.42.0 // indirect
+    github.com/quic-go/qpack v0.4.0 // indirect
+    github.com/quic-go/quic-go v0.34.0 // indirect
+    github.com/quic-go/qtls-go1-19 v0.3.2 // indirect
+    github.com/quic-go/qtls-go1-20 v0.2.2 // indirect
 	github.com/refraction-networking/utls v1.6.4 // indirect
 	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
 	github.com/sagernet/sing v0.3.8 // indirect
