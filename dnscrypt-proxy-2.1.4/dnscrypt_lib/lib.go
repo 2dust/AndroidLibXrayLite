@@ -44,7 +44,7 @@ func Start(config string) (*ProxyServer, error) {
 
 	var proxy *dnscrypt_proxy.Proxy = dnscrypt_proxy.NewProxy()
     configFlags := ConfigFlags{
-          ConfigFile: config
+          ConfigFile: config,
        }
 	if err := dnscrypt_proxy.ConfigLoad(proxy, configFlags); err != nil {
 		return nil, err
