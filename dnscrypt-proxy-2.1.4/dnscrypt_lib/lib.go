@@ -44,7 +44,7 @@ func Start(config string) (*ProxyServer, error) {
 
 	var proxy *dnscrypt_proxy.Proxy = dnscrypt_proxy.NewProxy()
 
-	if err := dnscrypt_proxy.ConfigLoad(proxy, config); err != nil {
+	if err := dnscrypt_proxy.ConfigLoad(proxy, nil); err != nil {
 		return nil, err
 	}
 	// if err := dnscrypt_proxy.PidFileCreate(); err != nil {
@@ -55,7 +55,7 @@ func Start(config string) (*ProxyServer, error) {
 	}
 
 	ps := &ProxyServer{}
-	ps.U, ps.T, ps.D = proxy.StartProxy()
+    proxy.StartProxy()
 	runtime.GC()
 	return ps, nil
 }
