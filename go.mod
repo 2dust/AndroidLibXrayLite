@@ -3,7 +3,7 @@ module github.com/2dust/AndroidLibXrayLite
 go 1.22.2
 
 require (
-    github.com/dnscrypt/dnscrypt-proxy v0.0.0-20230418191559-c66023c7d78d // indirect
+    github.com/dnscrypt/dnscrypt-proxy v2.1.5
 	github.com/xtls/xray-core v1.8.11
 	golang.org/x/mobile v0.0.0-20240506190922-a1a533f289d3
 	golang.org/x/sys v0.18.0
@@ -53,8 +53,4 @@ require (
 	gvisor.dev/gvisor v0.0.0-20231104011432-48a6d7d5bd0b // indirect
 	lukechampine.com/blake3 v1.2.1 // indirect
 )
-
-    replace (
-    github.com/dnscrypt/dnscrypt-proxy v0.0.0-20230418191559-c66023c7d78d => ../dnscrypt-proxy-2.1.4
-    )
 
