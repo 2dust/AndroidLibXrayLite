@@ -1,0 +1,17 @@
+server_names = ['odohtarget']
+listen_addresses = ['127.0.0.1:5300']
+
+[query_log]
+file = 'query.log'
+
+[static]
+  [static.'odohtarget']
+  stamp = 'sdns://BQcAAAAAAAAADm9kb2guY3J5cHRvLnN4Ci9kbnMtcXVlcnk'
+
+  [static.'odohrelay']
+  stamp = 'sdns://hQcAAAAAAAAAACCi3jNJDEdtNW4tvHN8J3lpIklSa2Wrj7qaNCgEgci9_BpvZG9oLXJlbGF5LmVkZ2Vjb21wdXRlLmFwcAEv'
+
+[anonymized_dns]
+  routes = [
+    { server_name='odohtarget', via=['odohrelay'] }
+  ]

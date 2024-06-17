@@ -1,0 +1,89 @@
+on:
+  push:
+    paths:
+      - "**.go"
+      - "go.*"
+      - "**/testdata/**"
+      - ".ci/**"
+      - ".git*"
+      - ".github/workflows/releases.yml"
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.*"
+      - "**/testdata/**"
+      - ".ci/**"
+      - ".git*"
+      - ".github/workflows/releases.yml"
+
+name: GitHub CI
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_OUTPUT
+
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1
+          check-latest: true
+        id: go
+
+      - name: Test suite
+        run: |
+          go version
+          cd .ci
+          ./ci-test.sh
+          cd -
+
+      - name: Build all
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          .ci/ci-build.sh "${{ steps.get_version.outputs.VERSION }}"
+
+      - name: Install minisign and sign
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          sudo apt-get -y install libsodium-dev
+          git clone --depth 1 https://github.com/jedisct1/minisign.git
+          cd minisign/src
+          mkdir -p /tmp/bin
+          cc -O2 -o /tmp/bin/minisign -D_GNU_SOURCE *.c -lsodium
+          cd -
+          /tmp/bin/minisign -v
+          echo '#' > /tmp/minisign.key
+          echo "${{ secrets.MINISIGN_SK }}" >> /tmp/minisign.key
+          cd dnscrypt-proxy
+          echo | /tmp/bin/minisign -s /tmp/minisign.key -Sm *.tar.gz *.zip
+          ls -l dnscrypt-proxy*
+
+      - name: Create release
+        id: create_release
+        uses: actions/create-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@c9b46fe7aad9f02afd89b12450b780f52dacfb2d
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            dnscrypt-proxy/*.zip
+            dnscrypt-proxy/*.tar.gz
+            dnscrypt-proxy/*.minisig
