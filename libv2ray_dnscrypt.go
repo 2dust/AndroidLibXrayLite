@@ -79,6 +79,7 @@ func helper(configStr string) {
 	}
 
 	app := &App{
+	    configStr: configStr,
 		flags: &flags,
 	}
 
