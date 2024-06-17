@@ -53,7 +53,4 @@ require (
 	gvisor.dev/gvisor v0.0.0-20231104011432-48a6d7d5bd0b // indirect
 	lukechampine.com/blake3 v1.2.1 // indirect
 )
-    replace (
-    github.com/dnscrypt/dnscrypt-proxy v0.0.0-20230418191559-c66023c7d78d => ../dnscrypt-proxy-2.1.4
-    )
 
