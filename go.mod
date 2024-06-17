@@ -3,8 +3,10 @@ module github.com/2dust/AndroidLibXrayLite
 go 1.22.4
 
 require (
+	github.com/dnscrypt/dnscrypt-proxy v1.21.5
+	github.com/jedisct1/dlog v0.0.0-20230811132706-443b333ff1b3
+	github.com/kardianos/service v1.2.2
 	github.com/xtls/xray-core v1.8.11
-	gitlab.com/nebulavpn/dnscrypt_proxy v0.0.0-20230418191559-c66023c7d78d
 	golang.org/x/mobile v0.0.0-20240506190922-a1a533f289d3
 	golang.org/x/sys v0.21.0
 )
@@ -26,20 +28,17 @@ require (
 	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/go-syslog v1.0.0 // indirect
-	github.com/hashicorp/golang-lru v0.5.4 // indirect
-	github.com/jedisct1/dlog v0.0.0-20230811132706-443b333ff1b3 // indirect
+	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/jedisct1/go-clocksmith v0.0.0-20230211133011-392c1afea73e // indirect
 	github.com/jedisct1/go-dnsstamps v0.0.0-20240423203910-07a0735c7774 // indirect
 	github.com/jedisct1/go-hpke-compact v0.0.0-20230811132953-4ee502b61f80 // indirect
 	github.com/jedisct1/go-minisign v0.0.0-20230811132847-661be99b8267 // indirect
 	github.com/jedisct1/xsecretbox v0.0.0-20230811132812-b950633f9f1f // indirect
 	github.com/k-sone/critbitgo v1.4.0 // indirect
-	github.com/kardianos/service v1.2.2 // indirect
 	github.com/klauspost/compress v1.17.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
 	github.com/miekg/dns v1.1.61 // indirect
 	github.com/onsi/ginkgo/v2 v2.16.0 // indirect
-	github.com/opencoff/go-sieve v0.2.1 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pires/go-proxyproto v0.7.0 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
@@ -74,4 +73,4 @@ require (
 	lukechampine.com/blake3 v1.2.2 // indirect
 )
 
-replace gitlab.com/nebulavpn/dnscrypt_proxy v0.0.0-20230418191559-c66023c7d78d => ./dnscrypt-proxy-2.1.4
+replace github.com/dnscrypt/dnscrypt-proxy v1.21.5 => ./dnscrypt-proxy-2.1.5

@@ -1,0 +1,10 @@
+## Rules to be applied at specific times
+##
+## This requires a time schedule to be defined in the
+## dnscrypt-proxy.toml configuration file.
+##
+## This file must be loaded using the --time-restricted command-line flag of the generate-domains-blocklist.py utility.
+
+# twitter.com       @work
+# facebook.com      @work
+# *.youtube.*       @time-to-sleep
