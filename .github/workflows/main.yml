@@ -12,7 +12,7 @@ jobs:
     steps:
 
     - name: Checkout repository
-      uses: actions/checkout@v4.2.2
+      uses: actions/checkout@v4
 
       
     - name: Setup Golang
@@ -27,7 +27,7 @@ jobs:
         distribution: 'temurin'
         
     - name: Setup Android SDK Tools
-      uses: android-actions/setup-android@v3.2.1
+      uses: android-actions/setup-android@v3.2.0
       with:
         cmdline-tools-version: 10406996
         
