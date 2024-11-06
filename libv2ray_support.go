@@ -328,7 +328,7 @@ func (d *ProtectedDialer) fdConn(ctx context.Context, ip net.IP, port int, netwo
 				Port: port,
 			},
 		}, nil
-	} else {
+	} else 
 		conn, err := net.FileConn(file)
 		if err != nil {
 			log.Printf("fdConn FileConn Close Fd: %d Err: %v", fd, err)
