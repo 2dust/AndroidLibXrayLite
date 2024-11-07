@@ -15,10 +15,26 @@ import (
 	"github.com/xtls/xray-core/features/dns"
 	"github.com/xtls/xray-core/features/outbound"
 	v2internet "github.com/xtls/xray-core/transport/internet"
+	// other imports
 )
 
 type protectSet interface {
 	Protect(int) bool
+}
+
+// ProtectedDialer represents a dialer that can protect connections.
+type ProtectedDialer struct {
+	// Existing fields
+}
+
+// Protect is a method that defines how to protect a file descriptor.
+func (d *ProtectedDialer) Protect(fd int) bool {
+	// Implement your protection logic here.
+	// For example, return true if protection is successful, otherwise false.
+	return true // Placeholder implementation
+}
+
+// Other methods of ProtectedDialer...
 }
 
 type resolved struct {
@@ -276,7 +292,10 @@ func (d *ProtectedDialer) fdConn(ctx context.Context ,ip net.IP ,port int ,netwo
     if !d.Protect(fd ) { 
         log.Printf("fdConn fail to protect; Close Fd: %d", fd )
         return nil ,errors.New("fail to protect") 
-     } 
+     }
+
+	// Remaining connection logic...
+} 
 
      sa := &unix.SockaddrInet6{ Port : port , } 
      copy(sa.Addr[:], ip.To16()) 
