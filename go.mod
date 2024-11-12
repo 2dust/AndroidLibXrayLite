@@ -12,7 +12,7 @@ require (
 	github.com/OmarTariq612/goech v0.0.0-20240405204721-8e2e1dafd3a0 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/cloudflare/circl v1.5.0 // indirect
-	github.com/dgryski/go-metro v0.0.0-20220713010506-cf37914876b7 // indirect
+	github.com/dgryski/go-metro v0.0.0-v0.0.0-20211217172704-adc40b04c140 // indirect
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
