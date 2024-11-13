@@ -1,9 +1,11 @@
-.vscode
-gradle/build.gradle
-*.pb.go
-binary*.go
-conf/demo/
+# Ignore Visual Studio Code Gradle build files
+.vscode/
+.gradle/
+build.gradle*.pb
 
-demo/
-assets/
-libv2ray*.[a|j]ar
+# Ignore Go binary files
+*.gobin
+*.goconf
+
+# Ignore demo assets for libv2ray
+/demo/demo/assets/libv2ray*.[a|j]ar
