@@ -68,8 +68,8 @@ github.com/vishvananda/netns v0.0.5 h1:DfiHV+j8bA32MFM7bfEunvT8IAqQ/NzSJHtcmW5zd
 github.com/vishvananda/netns v0.0.5/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 github.com/xtls/reality v0.0.0-20240909153216-e26ae2305463 h1:g1Cj7d+my6k/HHxLAyxPwyX8i7FGRr6ulBDMkBzg2BM=
 github.com/xtls/reality v0.0.0-20240909153216-e26ae2305463/go.mod h1:BjIOLmkEEtAgloAiVUcYj0Mt+YU00JARZw8AEU0IwAg=
-github.com/xtls/xray-core v1.8.25-0.20241031075831-4ec5c78c3453 h1:2piT7IYX0SKhYjD+XiJMDZAbY01MkP1HYO54njmisaQ=
-github.com/xtls/xray-core v1.8.25-0.20241031075831-4ec5c78c3453/go.mod h1:OlJhs59caMUabGbOamwTc2khBSOfd34qtVJVXFhpfWM=
+github.com/xtls/xray-core v1.8.25-0.20241111042233-0df2446f824d h1:00+ceMqRs5YdBMm4NLdsupYnxkP5Ghka9Lzw2ciVhgk=
+github.com/xtls/xray-core v1.8.25-0.20241111042233-0df2446f824d/go.mod h1:n8wJBW828YcDQ+9+BnAtbofXVt31VMvz4TwbZK0BaEE=
 go.uber.org/mock v0.5.0 h1:KAMbZvZPyBPWgD14IrIQ38QCyjwpvVVV6K/bHl1IwQU=
 go.uber.org/mock v0.5.0/go.mod h1:ge71pBPLYDk7QIi1LupWxdAykm7KIEFchiOqd6z7qMM=
 go4.org/netipx v0.0.0-20231129151722-fdeea329fbba h1:0b9z3AuHCjxk0x/opv64kcgZLBseWJUpBw5I82+2U4M=
