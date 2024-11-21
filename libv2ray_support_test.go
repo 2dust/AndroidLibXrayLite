@@ -19,47 +19,60 @@ func (f fakeSupportSet) Protect(int) bool {
 }
 
 func TestProtectedDialer_PrepareDomain(t *testing.T) {
-	tests := []struct {
-		name        string
+	type args struct {
 		domainName string
-	}{
-		{"baidu.com:80", "baidu.com:80"},
-		// Additional test cases can be added here.
 	}
-
-	d := NewProtectedDialer(fakeSupportSet{})
+	tests := []struct {
+		name string
+		args args
+	}{
+		// TODO: Add test cases.
+		{"", args{"baidu.com:80"}},
+		// {"", args{"cloudflare.com:443"}},
+		// {"", args{"apple.com:443"}},
+		// {"", args{"110.110.110.110:443"}},
+		// {"", args{"[2002:1234::1]:443"}},
+	}
+	d := NewPreotectedDialer(fakeSupportSet{})
 	for _, tt := range tests {
+		ch := make(chan struct{})
 		t.Run(tt.name, func(t *testing.T) {
-			ch := make(chan struct{})
-			go d.PrepareDomain(tt.domainName, ch, false)
+			go d.PrepareDomain(tt.args.domainName, ch, false)
 
 			time.Sleep(time.Second)
 			go d.vServer.NextIP()
 			t.Log(d.vServer.currentIP())
 		})
 	}
-	time.Sleep(time.Second) // Allow time for goroutines to complete
+
+	time.Sleep(time.Second)
 }
 
 func TestProtectedDialer_Dial(t *testing.T) {
+
 	tests := []struct {
 		name    string
 		wantErr bool
 	}{
+		// TODO: Add test cases.
 		{"baidu.com:80", false},
 		{"cloudflare.com:80", false},
 		{"172.16.192.11:80", true},
+		// {"172.16.192.10:80", true},
+		// {"[2fff:4322::1]:443", true},
+		// {"[fc00::1]:443", true},
 	}
-
-	d := NewProtectedDialer(fakeSupportSet{})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ch := make(chan struct{})
+
+			d := NewPreotectedDialer(fakeSupportSet{})
 			d.currentServer = tt.name
 
 			go d.PrepareDomain(tt.name, ch, false)
 
 			var wg sync.WaitGroup
+
 			dial := func() {
 				defer wg.Done()
 				dest, _ := v2net.ParseDestination("tcp:" + tt.name)
@@ -71,55 +84,68 @@ func TestProtectedDialer_Dial(t *testing.T) {
 					t.Log(err)
 					return
 				}
-				defer conn.Close()
-
-				host, _, _ := net.SplitHostPort(tt.name)
-				fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: %s\r\n\r\n", host)
+				_host, _, _ := net.SplitHostPort(tt.name)
+				fmt.Fprintf(conn, fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\n\r\n", _host))
 				status, err := bufio.NewReader(conn).ReadString('\n')
 				t.Logf("%#v, %#v\n", status, err)
+				conn.Close()
 			}
 
 			for n := 0; n < 3; n++ {
 				wg.Add(1)
 				go dial()
+				// time.Sleep(time.Millisecond * 10)
+				// d.pendingMap[tt.name] = make(chan struct{})
 			}
+
 			wg.Wait()
 		})
 	}
 }
 
 func Test_resolved_NextIP(t *testing.T) {
-	tests := []struct {
-		name   string
+	type fields struct {
 		domain string
 		IPs    []net.IP
-	}{
-		{
-			name:   "test1",
-			domain: "www.baidu.com",
-			IPs: []net.IP{
-				net.ParseIP("1.2.3.4"),
-				net.ParseIP("4.3.2.1"),
-				net.ParseIP("1234::1"),
-				net.ParseIP("4321::1"),
-			},
-		},
+		Port   int
 	}
-
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		// TODO: Add test cases.
+		{"test1",
+			fields{
+				domain: "www.baidu.com",
+				IPs: []net.IP{
+					net.ParseIP("1.2.3.4"),
+					net.ParseIP("4.3.2.1"),
+					net.ParseIP("1234::1"),
+					net.ParseIP("4321::1"),
+				},
+			}},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := &resolved{
-				domain: tt.domain,
-				IPs:    tt.IPs,
+				domain: tt.fields.domain,
+				IPs:    tt.fields.IPs,
+				Port:   tt.fields.Port,
 			}
-			for i := 0; i < len(r.IPs); i++ {
-				t.Logf("Current IP: %v", r.currentIP())
-				r.NextIP()
-			}
+			t.Logf("%v", r.IPs)
+			t.Logf("%v", r.currentIP())
+			r.NextIP()
+			t.Logf("%v", r.currentIP())
+			r.NextIP()
+			t.Logf("%v", r.currentIP())
+			r.NextIP()
+			t.Logf("%v", r.currentIP())
 			time.Sleep(3 * time.Second)
-			t.Logf("Next IP after sleep: %v", r.currentIP())
+			r.NextIP()
+			t.Logf("%v", r.currentIP())
 			time.Sleep(5 * time.Second)
-			t.Logf("Next IP after longer sleep: %v", r.currentIP())
+			r.NextIP()
+			t.Logf("%v", r.currentIP())
 		})
 	}
 }
