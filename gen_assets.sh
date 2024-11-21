@@ -1,93 +1,89 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status
 set -o errexit
-# Fail the entire pipeline if any command in the pipeline fails
 set -o pipefail
-# Treat unset variables as an error when substituting
 set -o nounset
 
-# Set magic variables for current file & directory
+# Set magic variables for current file & dir
 __dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-__file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
-__base="$(basename "${__file}" .sh)"
 DATADIR="${__dir}/data"
 
-# Function to compile data
-compile_dat () {
-    local TMPDIR=$(mktemp -d)
-    trap 'echo -e "Aborted, error $? in command: $BASH_COMMAND"; rm -rf "$TMPDIR"; exit 1' ERR
+# Error handling function
+handle_error() {
+    echo -e "Aborted, error $? in command: $BASH_COMMAND"
+    [[ -n "${TMPDIR:-}" ]] && rm -rf "$TMPDIR"
+    exit 1
+}
 
-    local GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
+trap handle_error ERR
 
-    # Clone or update the domain-list-community repository
-    if [[ -d ${GEOSITE} ]]; then
-        cd "${GEOSITE}" && git pull
+# Function to update a file from source to destination
+update_file() {
+    local src_file="$1"
+    local dest_file="$DATADIR/$2"
+    
+    if [[ -e "$src_file" ]]; then
+        rm -f "$dest_file"
+        mv "$src_file" "$dest_file"
+        echo "----------> $dest_file updated."
     else
-        mkdir -p "${GEOSITE}"
-        cd "${GEOSITE}" && git clone https://github.com/v2ray/domain-list-community.git .
+        echo "----------> $dest_file failed to update."
     fi
+}
 
-    # Run the main Go program to generate geosite.dat
-    go run main.go
+# Function to compile data files
+compile_data() {
+    TMPDIR=$(mktemp -d)
+    local geosite_dir="${GOPATH}/src/github.com/v2ray/domain-list-community"
 
-    # Update geosite.dat if it exists
-    if [[ -e dlc.dat ]]; then
-        rm -f "$DATADIR/geosite.dat"
-        mv dlc.dat "$DATADIR/geosite.dat"
-        echo "----------> geosite.dat updated."
+    # Clone or update the geosite repository
+    if [[ -d ${geosite_dir} ]]; then
+        (cd "${geosite_dir}" && git pull)
     else
-        echo "----------> geosite.dat failed to update."
+        git clone https://github.com/v2ray/domain-list-community.git "${geosite_dir}"
     fi
+    
+    (cd "${geosite_dir}" && go run main.go)
 
-    # Install geoip if not already installed
-    if [[ ! -x "$GOPATH/bin/geoip" ]]; then
+    update_file "dlc.dat" "geosite.dat"
+
+    # Install geoip if not installed
+    if [[ ! -x "${GOPATH}/bin/geoip" ]]; then
         go get -v -u github.com/v2ray/geoip
     fi
 
-    # Download and process GeoLite2 country database
-    cd "$TMPDIR"
-    curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
-    unzip -q GeoLite2-Country-CSV.zip
+    # Download and process GeoLite2 data
+    (cd "$TMPDIR" && {
+        curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
+        unzip -q GeoLite2-Country-CSV.zip
+        mkdir geoip && find . -name '*.csv' -exec mv -t ./geoip {} +
 
-    mkdir geoip && find . -name '*.csv' -exec mv -t ./geoip {} +
+        "${GOPATH}/bin/geoip" \
+            --country=./geoip/GeoLite2-Country-Locations-en.csv \
+            --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
+            --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
 
-    $GOPATH/bin/geoip \
-        --country=./geoip/GeoLite2-Country-Locations-en.csv \
-        --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
-        --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
+        update_file "geoip.dat" "geoip.dat"
+    })
 
-    # Update geoip.dat if it exists
-    if [[ -e geoip.dat ]]; then
-        rm -f "$DATADIR/geoip.dat"
-        mv ./geoip.dat "$DATADIR/geoip.dat"
-        echo "----------> geoip.dat updated."
-    else
-        echo "----------> geoip.dat failed to update."
-    fi
-
-    trap ERR return 0
+    [[ -n "${TMPDIR:-}" ]] && rm -rf "$TMPDIR"
 }
 
-# Function to download data directly from GitHub releases
-download_dat () {
-    wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest \
-        | grep browser_download_url | cut -d '"' -f 4 \
-        | wget -i - -O "$DATADIR/geoip.dat"
-
-    wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest \
-        | grep browser_download_url | cut -d '"' -f 4 \
-        | wget -i - -O "$DATADIR/geosite.dat"
+# Function to download data files from GitHub releases
+download_data() {
+    for repo in "geoip" "domain-list-community"; do
+        local download_url
+        download_url=$(wget -qO - "https://api.github.com/repos/v2ray/${repo}/releases/latest" \
+            | grep browser_download_url | cut -d '"' -f 4)
+        
+        wget -O "$DATADIR/${repo}.dat" "$download_url"
+    done
 }
 
-# Determine action based on input argument or default to download
-ACTION="${1:-}"
+# Main script execution logic
+ACTION="${1:-download}"
 
-if [[ -z $ACTION ]]; then 
-    ACTION=download 
-fi
-
-case $ACTION in 
-    "download") download_dat ;; 
-    "compile") compile_dat ;; 
+case $ACTION in
+    "download") download_data ;;
+    "compile") compile_data ;;
 esac
