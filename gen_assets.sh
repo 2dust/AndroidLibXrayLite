@@ -9,65 +9,44 @@ set -o nounset
 
 # Set magic variables for current file & directory
 __dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+__file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
+__base="$(basename "${__file}" .sh)"
 DATADIR="${__dir}/data"
-GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
-
-# Function to handle errors and cleanup
-error_handler() {
-    echo -e "Aborted, error $? in command: $BASH_COMMAND"
-    [[ -n "${TMPDIR:-}" ]] && rm -rf "$TMPDIR"
-    exit 1
-}
-
-trap error_handler ERR
 
 # Function to compile data
-compile_dat() {
-    TMPDIR=$(mktemp -d)
-    cd "$TMPDIR"
+compile_dat () {
+    local TMPDIR=$(mktemp -d)
+    trap 'echo -e "Aborted, error $? in command: $BASH_COMMAND"; rm -rf "$TMPDIR"; exit 1' ERR
+
+    local GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
 
     # Clone or update the domain-list-community repository
-    if [[ -d $GEOSITE ]]; then
-        cd "$GEOSITE" && git pull
+    if [[ -d ${GEOSITE} ]]; then
+        cd "${GEOSITE}" && git pull
     else
-        git clone https://github.com/v2ray/domain-list-community.git "$GEOSITE"
-        cd "$GEOSITE"
+        mkdir -p "${GEOSITE}"
+        cd "${GEOSITE}" && git clone https://github.com/v2ray/domain-list-community.git .
     fi
 
     # Run the main Go program to generate geosite.dat
     go run main.go
 
     # Update geosite.dat if it exists
-    update_file "dlc.dat" "geosite.dat" "$DATADIR"
+    if [[ -e dlc.dat ]]; then
+        rm -f "$DATADIR/geosite.dat"
+        mv dlc.dat "$DATADIR/geosite.dat"
+        echo "----------> geosite.dat updated."
+    else
+        echo "----------> geosite.dat failed to update."
+    fi
 
     # Install geoip if not already installed
-    [[ ! -x "$GOPATH/bin/geoip" ]] && go get -v -u github.com/v2ray/geoip
+    if [[ ! -x "$GOPATH/bin/geoip" ]]; then
+        go get -v -u github.com/v2ray/geoip
+    fi
 
     # Download and process GeoLite2 country database
-    download_geoip_data
-
-    # Update geoip.dat if it exists
-    update_file "geoip.dat" "geoip.dat" "$DATADIR"
-
-    rm -rf "$TMPDIR"
-}
-
-# Function to update files and notify user
-update_file() {
-    local src_file="$1"
-    local dest_file="$2"
-    local dest_dir="$3"
-
-    if [[ -e $src_file ]]; then
-        mv -f "$src_file" "$dest_dir/$dest_file"
-        echo "----------> $dest_file updated."
-    else
-        echo "----------> $dest_file failed to update."
-    fi
-}
-
-# Function to download and process GeoLite2 data
-download_geoip_data() {
+    cd "$TMPDIR"
     curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
     unzip -q GeoLite2-Country-CSV.zip
 
@@ -77,19 +56,36 @@ download_geoip_data() {
         --country=./geoip/GeoLite2-Country-Locations-en.csv \
         --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
         --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
+
+    # Update geoip.dat if it exists
+    if [[ -e geoip.dat ]]; then
+        rm -f "$DATADIR/geoip.dat"
+        mv ./geoip.dat "$DATADIR/geoip.dat"
+        echo "----------> geoip.dat updated."
+    else
+        echo "----------> geoip.dat failed to update."
+    fi
+
+    trap ERR return 0
 }
 
 # Function to download data directly from GitHub releases
-download_dat() {
-    for repo in "geoip" "domain-list-community"; do
-        wget -qO - "https://api.github.com/repos/v2ray/${repo}/releases/latest" \
-            | grep browser_download_url | cut -d '"' -f 4 \
-            | wget -i - -O "$DATADIR/${repo}.dat"
-    done
+download_dat () {
+    wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest \
+        | grep browser_download_url | cut -d '"' -f 4 \
+        | wget -i - -O "$DATADIR/geoip.dat"
+
+    wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest \
+        | grep browser_download_url | cut -d '"' -f 4 \
+        | wget -i - -O "$DATADIR/geosite.dat"
 }
 
 # Determine action based on input argument or default to download
-ACTION="${1:-download}"
+ACTION="${1:-}"
+
+if [[ -z $ACTION ]]; then 
+    ACTION=download 
+fi
 
 case $ACTION in 
     "download") download_dat ;; 
