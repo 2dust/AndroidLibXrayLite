@@ -5,7 +5,7 @@ go 1.22.4
 require (
 	github.com/xtls/xray-core v0.0.0-20241218133935-cab2fdefd321
 	golang.org/x/mobile v0.0.0-20241004191011-08a83c5af9f8
-	golang.org/x/sys v0.26.0
+	golang.org/x/sys v0.28.0
 )
 
 require (
