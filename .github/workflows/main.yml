@@ -27,7 +27,7 @@ jobs:
        cd "$(go env GOROOT)"
        curl "https://go-review.googlesource.com/changes/go~600296/revisions/5/patch" | base64 -d | patch --verbose -p 1
 
-    - name: Setup Golang
+    - name: Install gomobile
       run: |
         go install golang.org/x/mobile/cmd/gomobile@latest
         export PATH=$PATH:~/go/bin
