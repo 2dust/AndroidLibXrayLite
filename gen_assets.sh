@@ -4,9 +4,6 @@ set -euo pipefail
 
 # Set magic variables for current file & dir
 __dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-__file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
-__base="$(basename "${__file}" .sh)"
-
 DATADIR="${__dir}/data"
 
 handle_error() {
@@ -32,46 +29,46 @@ update_file() {
 compile_dat() {
     local TMPDIR
     TMPDIR=$(mktemp -d)
-
     local GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
-    
+
+    # Clone or update the geosite repository
     if [[ -d "${GEOSITE}" ]]; then
-        cd "${GEOSITE}" && git pull
+        (cd "${GEOSITE}" && git pull)
     else
-        mkdir -p "${GEOSITE}"
-        cd "${GEOSITE}" && git clone https://github.com/v2ray/domain-list-community.git .
+        git clone https://github.com/v2ray/domain-list-community.git "${GEOSITE}"
     fi
 
-    go run main.go
+    (cd "${GEOSITE}" && go run main.go)
     update_file "dlc.dat" "$DATADIR/geosite.dat"
 
+    # Ensure geoip is installed
     if [[ ! -x "$GOPATH/bin/geoip" ]]; then
         go get -v -u github.com/v2ray/geoip
     fi
 
-    cd "$TMPDIR"
-    curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
-    unzip -q GeoLite2-Country-CSV.zip
-    mkdir geoip && find . -name '*.csv' -exec mv -t ./geoip {} +
-
-    "$GOPATH/bin/geoip" \
-        --country=./geoip/GeoLite2-Country-Locations-en.csv \
-        --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
-        --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
+    # Download and process GeoLite data
+    (cd "$TMPDIR" && {
+        curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
+        unzip -q GeoLite2-Country-CSV.zip
+        mkdir geoip && find . -name '*.csv' -exec mv -t ./geoip {} +
+        
+        "$GOPATH/bin/geoip" \
+            --country=./geoip/GeoLite2-Country-Locations-en.csv \
+            --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
+            --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
+    })
 
     update_file "geoip.dat" "$DATADIR/geoip.dat"
-
+    
     rm -rf "$TMPDIR"
 }
 
 download_dat() {
-    wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest \
-        | grep browser_download_url | cut -d '"' -f 4 \
-        | wget -i - -O "$DATADIR/geoip.dat"
+    local geoip_url=$(wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest | grep browser_download_url | cut -d '"' -f 4)
+    local geosite_url=$(wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest | grep browser_download_url | cut -d '"' -f 4)
 
-    wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest \
-        | grep browser_download_url | cut -d '"' -f 4 \
-        | wget -i - -O "$DATADIR/geosite.dat"
+    wget -qO "$DATADIR/geoip.dat" "$geoip_url"
+    wget -qO "$DATADIR/geosite.dat" "$geosite_url"
 }
 
 ACTION="${1:-download}"
