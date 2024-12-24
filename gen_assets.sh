@@ -4,78 +4,80 @@ set -o errexit
 set -o pipefail
 set -o nounset
 
-# Set magic variables for current file & dir
+# Define magic variables for current file & dir
 __dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+__file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
+__base="$(basename "${__file}" .sh)"
+
 DATADIR="${__dir}/data"
 
-# Function to handle errors
-error_exit() {
-    echo "Aborted, error $? in command: $BASH_COMMAND"
-    exit 1
-}
-
-trap error_exit ERR
-
-# Function to update a repository
-update_repo() {
-    local repo_dir="$1"
-    local repo_url="$2"
-
-    if [[ -d "${repo_dir}" ]]; then
-        (cd "${repo_dir}" && git pull)
-    else
-        git clone "${repo_url}" "${repo_dir}"
-    fi
-}
-
-# Function to compile geosite and geoip data
+# Function to compile data
 compile_dat() {
     local TMPDIR
     TMPDIR=$(mktemp -d)
 
+    trap 'echo -e "Aborted, error $? in command: $BASH_COMMAND"; rm -rf "$TMPDIR"; exit 1' ERR
+
     local GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
-    update_repo "${GEOSITE}" "https://github.com/v2ray/domain-list-community.git"
+    
+    # Update or clone the geosite repository
+    if [[ -d "${GEOSITE}" ]]; then
+        (cd "${GEOSITE}" && git pull)
+    else
+        mkdir -p "${GEOSITE}"
+        git clone https://github.com/v2ray/domain-list-community.git "${GEOSITE}"
+    fi
+    
+    (cd "${GEOSITE}" && go run main.go)
 
-    go run main.go
-
-    # Update geosite.dat if dlc.dat exists
-    [[ -e dlc.dat ]] && mv -f dlc.dat "${DATADIR}/geosite.dat" && echo "----------> geosite.dat updated." || echo "----------> geosite.dat failed to update."
+    # Update geosite.dat
+    if [[ -e dlc.dat ]]; then
+        mv -f dlc.dat "${DATADIR}/geosite.dat"
+        echo "----------> geosite.dat updated."
+    else
+        echo "----------> geosite.dat failed to update."
+    fi
 
     # Ensure geoip is installed
-    command -v geoip >/dev/null || go get -v -u github.com/v2ray/geoip
+    if [[ ! -x "${GOPATH}/bin/geoip" ]]; then
+        go get -v -u github.com/v2ray/geoip
+    fi
 
-    cd "$TMPDIR"
-    curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
-    unzip -q GeoLite2-Country-CSV.zip
+    # Download and process GeoLite2 data
+    (cd "$TMPDIR" && {
+        curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
+        unzip -q GeoLite2-Country-CSV.zip
+        mkdir geoip && find . -name '*.csv' -exec mv -t ./geoip {} +
+        
+        "${GOPATH}/bin/geoip" \
+            --country=./geoip/GeoLite2-Country-Locations-en.csv \
+            --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
+            --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
+    })
 
-    mkdir geoip && find . -name '*.csv' -exec mv -t ./geoip {} +
+    # Update geoip.dat
+    if [[ -e geoip.dat ]]; then
+        mv -f geoip.dat "${DATADIR}/geoip.dat"
+        echo "----------> geoip.dat updated."
+    else
+        echo "----------> geoip.dat failed to update."
+    fi
 
-    # Generate geoip.dat from the CSV files
-    "${GOPATH}/bin/geoip" \
-        --country=./geoip/GeoLite2-Country-Locations-en.csv \
-        --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
-        --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
-
-    # Update geoip.dat if it exists
-    [[ -e geoip.dat ]] && mv -f geoip.dat "${DATADIR}/geoip.dat" && echo "----------> geoip.dat updated." || echo "----------> geoip.dat failed to update."
-
-    rm -rf "$TMPDIR"  # Clean up temporary directory after use
+    rm -rf "$TMPDIR"
 }
 
-# Function to download data from GitHub releases using jq for better parsing
+# Function to download data directly from releases
 download_dat() {
-    local urls=(
-        "https://api.github.com/repos/v2ray/geoip/releases/latest"
-        "https://api.github.com/repos/v2ray/domain-list-community/releases/latest"
-    )
+    wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest \
+        | grep browser_download_url | cut -d '"' -f 4 \
+        | wget -i - -O "${DATADIR}/geoip.dat"
 
-    for url in "${urls[@]}"; do
-        local download_url=$(curl -s "$url" | jq -r '.assets[].browser_download_url' | head -n 1)
-        wget -P "${DATADIR}" "$download_url"
-    done
+    wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest \
+        | grep browser_download_url | cut -d '"' -f 4 \
+        | wget -i - -O "${DATADIR}/geosite.dat"
 }
 
-# Main script execution
+# Determine action based on input argument or default to download
 ACTION="${1:-download}"
 
 case $ACTION in
