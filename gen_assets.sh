@@ -14,8 +14,8 @@ DATADIR="${__dir}/data"
 # Function to compile data files
 compile_dat() {
     local TMPDIR
-    TMPDIR=$(mktemp -d)
-    
+    TMPDIR=$(mktemp -d)  # Create a temporary directory
+
     # Error handling trap
     trap 'echo -e "Aborted, error $? in command: $BASH_COMMAND"; rm -rf "$TMPDIR"; exit 1' ERR
 
@@ -42,19 +42,20 @@ compile_dat() {
 
     # Ensure geoip binary is available
     if [[ ! -x "$GOPATH/bin/geoip" ]]; then
-        go get -v -u github.com/v2ray/geoip
+        go get -v -u github.com/v2ray/geoip || { echo "Failed to install geoip."; exit 1; }
     fi
 
     # Download and process GeoLite data
     (cd "$TMPDIR" && {
-        curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
-        unzip -q GeoLite2-Country-CSV.zip
+        curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip || { echo "Failed to download GeoLite2 data."; exit 1; }
+        unzip -q GeoLite2-Country-CSV.zip || { echo "Failed to unzip GeoLite2 data."; exit 1; }
+        
         mkdir geoip && find . -name '*.csv' -exec mv -t ./geoip {} +
 
         "$GOPATH/bin/geoip" \
             --country=./geoip/GeoLite2-Country-Locations-en.csv \
             --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
-            --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
+            --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv || { echo "Failed to process GeoLite2 data."; exit 1; }
     })
 
     # Update geoip.dat if it exists
@@ -73,10 +74,18 @@ download_dat() {
     local geoip_url geosite_url
 
     geoip_url=$(wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest | grep browser_download_url | cut -d '"' -f 4)
-    wget -qO "$DATADIR/geoip.dat" "$geoip_url"
+    
+    if ! wget -qO "$DATADIR/geoip.dat" "$geoip_url"; then
+        echo "Failed to download geoip.dat from $geoip_url"
+        exit 1
+    fi
 
     geosite_url=$(wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest | grep browser_download_url | cut -d '"' -f 4)
-    wget -qO "$DATADIR/geosite.dat" "$geosite_url"
+    
+    if ! wget -qO "$DATADIR/geosite.dat" "$geosite_url"; then
+        echo "Failed to download geosite.dat from $geosite_url"
+        exit 1
+    fi
 }
 
 # Determine action based on input argument or default to download
@@ -84,7 +93,7 @@ ACTION="${1:-download}"
 
 case $ACTION in
     "download") download_dat ;;
-    "compile") compile_dat ;;
+    "compile") compile_dat ;;    
     *) echo "Invalid action. Use 'download' or 'compile'." ; exit 1 ;;
 esac
 
