@@ -11,7 +11,6 @@ __base="$(basename "${__file}" .sh)"
 
 DATADIR="${__dir}/data"
 
-# Function to compile data
 compile_dat() {
     local TMPDIR
     TMPDIR=$(mktemp -d)
@@ -32,7 +31,8 @@ compile_dat() {
 
     # Update geosite.dat
     if [[ -e dlc.dat ]]; then
-        mv -f dlc.dat "${DATADIR}/geosite.dat"
+        rm -f "${DATADIR}/geosite.dat"
+        mv dlc.dat "${DATADIR}/geosite.dat"
         echo "----------> geosite.dat updated."
     else
         echo "----------> geosite.dat failed to update."
@@ -57,16 +57,17 @@ compile_dat() {
 
     # Update geoip.dat
     if [[ -e geoip.dat ]]; then
-        mv -f geoip.dat "${DATADIR}/geoip.dat"
+        rm -f "${DATADIR}/geoip.dat"
+        mv geoip.dat "${DATADIR}/geoip.dat"
         echo "----------> geoip.dat updated."
     else
         echo "----------> geoip.dat failed to update."
     fi
 
+    # Clean up temporary directory
     rm -rf "$TMPDIR"
 }
 
-# Function to download data directly from releases
 download_dat() {
     wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest \
         | grep browser_download_url | cut -d '"' -f 4 \
