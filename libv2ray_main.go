@@ -18,6 +18,7 @@ import (
 
 	v2net "github.com/xtls/xray-core/common/net"
 	v2filesystem "github.com/xtls/xray-core/common/platform/filesystem"
+	"github.com/xtls/xray-core/common/serial"
 	v2core "github.com/xtls/xray-core/core"
 	v2stats "github.com/xtls/xray-core/features/stats"
 	v2serial "github.com/xtls/xray-core/infra/conf/serial"
@@ -212,7 +213,13 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	config.Inbound = nil
 	// config.App: (fakedns), log, dispatcher, InboundConfig, OutboundConfig, (stats), router, dns, (policy)
 	// keep only basic features
-	config.App = config.App[:5]
+	var essentialApp []*serial.TypedMessage
+	for _, app := range config.App {
+		if app.Type == "xray.app.proxyman.OutboundConfig" || app.Type == "xray.app.dispatcher.Config" || app.Type == "xray.app.log.Config" {
+			essentialApp = append(essentialApp, app)
+		}
+	}
+	config.App = essentialApp
 
 	inst, err := v2core.New(config)
 	if err != nil {
