@@ -63,4 +63,3 @@ jobs:
         file: ./libv2ray*r
         tag: ${{ github.event.inputs.release_tag }}
         file_glob: true
-        prerelease: true
