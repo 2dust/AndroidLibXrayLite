@@ -61,8 +61,8 @@ compile_dat () {
 
 
 download_dat () {
-    wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest \
-    | grep browser_download_url | cut -d '"' -f 4 \
+    wget -qO - https://api.github.com/repos/dyhkwong/v2ray-geoip/releases/latest \
+    | jq -r .assets[].browser_download_url | grep geoip.dat \
     | wget -i - -O $DATADIR/geoip.dat
 
     wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest \
