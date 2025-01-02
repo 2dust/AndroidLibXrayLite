@@ -13,7 +13,6 @@ jobs:
 
     - name: Checkout repository
       uses: actions/checkout@v4
-
       
     - name: Setup Golang
       uses: actions/setup-go@v5
@@ -21,7 +20,6 @@ jobs:
         go-version-file: 'go.mod'
 
     - name: Patch Go use 600296
-      if: steps.cache-libv2ray-restore.outputs.cache-hit != 'true'
       #https://go-review.googlesource.com/c/go/+/600296
       run: |
        cd "$(go env GOROOT)"
@@ -29,25 +27,27 @@ jobs:
 
     - name: Install gomobile
       run: |
-        go install github.com/sagernet/gomobile/cmd/gomobile@latest
+        CGO_ENABLED=0 go install -trimpath -ldflags="-w -s"  github.com/sagernet/gomobile/cmd/gomobile@latest
         export PATH=$PATH:~/go/bin
-      
-    - name: Setup Java
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '21'
-        
-    - name: Setup Android SDK Tools
-      uses: android-actions/setup-android@v3.2.2
-      with:
-        cmdline-tools-version: 10406996
         
     - name: Setup Android NDK
-      uses: nttld/setup-ndk@v1.5.0
+      uses: nttld/setup-ndk@v1
+      id: setup-ndk
       with:
-        ndk-version: 'r27b'
+        ndk-version: r27
+        add-to-path: true
         link-to-sdk: true
+        local-cache: true
+
+    - name: Restore Android Symlinks
+      run: |
+        directory="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        find "$directory" -type l | while read link; do
+            current_target=$(readlink "$link")
+            new_target="$directory/$(basename "$current_target")"
+            ln -sf "$new_target" "$link"
+            echo "Changed $(basename "$link") from $current_target to $new_target"
+        done
 
     - name: Build
       run: |
@@ -56,7 +56,10 @@ jobs:
          cp -v data/*.dat assets/
          gomobile init
          go mod tidy
-         gomobile bind -v -androidapi 21 -ldflags='-s -w' ./
+         gomobile bind -v -androidapi 21 -trimpath -buildvcs=false -ldflags='-s -w -buildid=' ./
+      env:
+        ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+
     - name: Upload AndroidLibXrayLite to release
       uses: svenstaro/upload-release-action@v2
       with:
