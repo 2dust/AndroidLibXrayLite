@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  check-release:
+  update:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout our repository
@@ -54,3 +54,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
           commit_message: Updating xray-core to ${{ env.LATEST_TAG }}
+          tagging_message: ${{ env.LATEST_TAG }}
