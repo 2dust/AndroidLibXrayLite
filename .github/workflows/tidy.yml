@@ -51,7 +51,9 @@ jobs:
 
       - name: Update and commit changes
         if: env.needs_update == 'true'
-        uses: evantorrie/mott-the-tidier@v1-beta
+        run: |
+          go mod tidy -v
+          git diff
 
       - name: Commit and push changes
         id: auto-commit-action
