@@ -57,6 +57,7 @@ jobs:
           tagging_message: ${{ env.LATEST_TAG }}
 
       - name: Trigger build
+        if: env.needs_update == 'true'
         run: |
           curl -X POST \
             -H "Accept: application/vnd.github.v3+json" \
