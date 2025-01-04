@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout our repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
 
       - name: Fetch latest release tag from external repository
         id: fetch-release
