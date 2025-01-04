@@ -53,4 +53,4 @@ jobs:
         if: env.needs_update == 'true'
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
-          commit_message: Updating xray-core to $LATEST_TAG
+          commit_message: Updating xray-core to ${{ env.LATEST_TAG }}
