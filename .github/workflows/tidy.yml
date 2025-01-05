@@ -1,0 +1,78 @@
+name: Check and Update xray-core
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout our repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
+
+      - name: Fetch latest release tag from external repository
+        id: fetch-release
+        run: |
+          EXTERNAL_REPO="XTLS/Xray-core"
+          LATEST_TAG=$(curl -s https://api.github.com/repos/$EXTERNAL_REPO/releases/latest | jq -r '.tag_name')
+          echo "Latest tag from external repo: $LATEST_TAG"
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+
+      - name: Fetch current repository release tag
+        id: fetch-current-tag
+        run: |
+          CURRENT_TAG=$(git describe --tags --abbrev=0)
+          echo "Current tag in this repo: $CURRENT_TAG"
+          echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
+
+      - name: Compare tags
+        id: compare-tags
+        run: |
+          if [ "$LATEST_TAG" != "$CURRENT_TAG" ]; then
+            echo "Tags are different. Updating..."
+            echo "needs_update=true" >> $GITHUB_ENV
+          else
+            echo "Tags are the same. No update needed."
+            echo "needs_update=false" >> $GITHUB_ENV
+          fi
+
+      - name: Setup Golang
+        if: env.needs_update == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Update and commit changes
+        if: env.needs_update == 'true'
+        run: |
+          go mod tidy -v
+          git diff
+
+      - name: Commit and push changes
+        id: auto-commit-action
+        if: env.needs_update == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: Updating xray-core to ${{ env.LATEST_TAG }}
+          tagging_message: ${{ env.LATEST_TAG }}
+
+      - name: Trigger build
+        if: env.needs_update == 'true' && steps.auto-commit-action.outputs.changes_detected == 'true'
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/main.yml/dispatches \
+            -d "{
+              \"ref\": \"main\",
+              \"inputs\": {
+                \"release_tag\": \"${{ env.LATEST_TAG }}\"
+              }
+            }"
