@@ -1,0 +1,6 @@
+[submodule "libancillary"]
+	path = libancillary
+	url = https://github.com/shadowsocks/libancillary
+[submodule "badvpn"]
+	path = badvpn
+	url = https://github.com/XTLS/badvpn.git
