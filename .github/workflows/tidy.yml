@@ -21,7 +21,7 @@ jobs:
         id: fetch-release
         run: |
           EXTERNAL_REPO="XTLS/Xray-core"
-          LATEST_TAG=$(curl -s https://api.github.com/repos/$EXTERNAL_REPO/releases/latest | jq -r '.tag_name')
+          LATEST_TAG=$(curl -s https://api.github.com/repos/$EXTERNAL_REPO/tags | jq -r '.[0].name')
           echo "Latest tag from external repo: $LATEST_TAG"
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
 
