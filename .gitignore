@@ -7,3 +7,5 @@ conf/demo/
 demo/
 assets/
 libv2ray*.[a|j]ar
+/.idea
+.DS_Store
