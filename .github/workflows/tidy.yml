@@ -21,21 +21,24 @@ jobs:
         id: fetch-release
         run: |
           EXTERNAL_REPO="XTLS/Xray-core"
-          LATEST_TAG=$(curl -s https://api.github.com/repos/$EXTERNAL_REPO/tags | jq -r '.[0].name')
-          echo "Latest tag from external repo: $LATEST_TAG"
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          LATEST_TAG=$(curl -s https://api.github.com/repos/$EXTERNAL_REPO/tags | jq -r '.[0]')
+          LATEST_TAG_NAME=$(echo $LATEST_TAG | jq -r .name)
+          LATEST_TAG_SHA=$(echo $LATEST_TAG | jq -r .commit.sha)
+          echo "Latest tag from external repo: $LATEST_TAG_NAME"
+          echo "LATEST_TAG_NAME=$LATEST_TAG_NAME" >> $GITHUB_ENV
+          echo "LATEST_TAG_SHA=$LATEST_TAG_SHA" >> $GITHUB_ENV
 
       - name: Fetch current repository release tag
         id: fetch-current-tag
         run: |
-          CURRENT_TAG=$(git describe --tags --abbrev=0)
-          echo "Current tag in this repo: $CURRENT_TAG"
-          echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
+          CURRENT_TAG_NAME=$(git describe --tags --abbrev=0)
+          echo "Current tag in this repo: $CURRENT_TAG_NAME"
+          echo "CURRENT_TAG_NAME=$CURRENT_TAG_NAME" >> $GITHUB_ENV
 
       - name: Compare tags
         id: compare-tags
         run: |
-          if [ "$LATEST_TAG" != "$CURRENT_TAG" ]; then
+          if [ "$LATEST_TAG_NAME" != "$CURRENT_TAG_NAME" ]; then
             echo "Tags are different. Updating..."
             echo "needs_update=true" >> $GITHUB_ENV
           else
@@ -52,6 +55,7 @@ jobs:
       - name: Update and commit changes
         if: env.needs_update == 'true'
         run: |
+          go get github.com/xtls/xray-core@${{ env.LATEST_TAG_SHA }}
           go mod tidy -v
           git diff
 
@@ -60,8 +64,8 @@ jobs:
         if: env.needs_update == 'true'
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
-          commit_message: Updating xray-core to ${{ env.LATEST_TAG }}
-          tagging_message: ${{ env.LATEST_TAG }}
+          commit_message: Updating xray-core to ${{ env.LATEST_TAG_NAME }} ${{ env.LATEST_TAG_SHA }}
+          tagging_message: ${{ env.LATEST_TAG_NAME }}
 
       - name: Trigger build
         if: env.needs_update == 'true' && steps.auto-commit-action.outputs.changes_detected == 'true'
@@ -73,6 +77,6 @@ jobs:
             -d "{
               \"ref\": \"main\",
               \"inputs\": {
-                \"release_tag\": \"${{ env.LATEST_TAG }}\"
+                \"release_tag\": \"${{ env.LATEST_TAG_NAME }}\"
               }
             }"
