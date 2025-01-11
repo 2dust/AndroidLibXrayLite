@@ -27,7 +27,7 @@ jobs:
 
     - name: Install gomobile
       run: |
-        CGO_ENABLED=0 go install -trimpath -ldflags="-w -s" golang.org/x/mobile/cmd/gomobile@latest
+        go install golang.org/x/mobile/cmd/gomobile@latest
         export PATH=$PATH:~/go/bin
         
     - name: Setup Android NDK
