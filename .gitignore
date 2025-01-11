@@ -7,3 +7,6 @@ conf/demo/
 demo/
 assets/
 libv2ray*.[a|j]ar
+
+*.so
+*.so.tgz
