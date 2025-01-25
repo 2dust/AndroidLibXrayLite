@@ -103,7 +103,7 @@ jobs:
           commit_message: >
             Update dependencies:
             ${{ env.XRAY_NEEDS_UPDATE == 'true' && format('xray-core to {0}', env.LATEST_XRAY_TAG_NAME) || '' }}
-            ${{ env.GO_NEEDS_UPDATE == 'true' && format('&Go version to {0}', env.LATEST_GO_TAG) || '' }}
+            ${{ env.GO_NEEDS_UPDATE == 'true' && format(' Go version to {0}', env.LATEST_GO_TAG) || '' }}
           commit_user_name: github-actions[bot]
           commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
           commit_author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
