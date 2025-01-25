@@ -1,5 +1,4 @@
-name: Check and Update xray-core
-
+name: Check and Update Dependencies
 on:
   push:
     branches:
@@ -9,66 +8,108 @@ on:
   workflow_dispatch:
 
 jobs:
-  update:
+  update-dependencies:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout our repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: '0'
 
-      - name: Fetch latest release tag from external repository
-        id: fetch-release
+      - name: Fetch latest xray-core release
+        id: fetch-xray-release
         run: |
           EXTERNAL_REPO="XTLS/Xray-core"
           LATEST_TAG=$(curl -s https://api.github.com/repos/$EXTERNAL_REPO/tags | jq -r '.[0]')
           LATEST_TAG_NAME=$(echo $LATEST_TAG | jq -r .name)
           LATEST_TAG_SHA=$(echo $LATEST_TAG | jq -r .commit.sha)
-          echo "Latest tag from external repo: $LATEST_TAG_NAME"
-          echo "LATEST_TAG_NAME=$LATEST_TAG_NAME" >> $GITHUB_ENV
-          echo "LATEST_TAG_SHA=$LATEST_TAG_SHA" >> $GITHUB_ENV
+          echo "Latest xray-core tag: $LATEST_TAG_NAME"
+          echo "LATEST_XRAY_TAG_NAME=$LATEST_TAG_NAME" >> $GITHUB_ENV
+          echo "LATEST_XRAY_TAG_SHA=$LATEST_TAG_SHA" >> $GITHUB_ENV
 
-      - name: Fetch current repository release tag
-        id: fetch-current-tag
+      - name: Fetch current xray-core tag
+        id: fetch-current-xray-tag
         run: |
-          CURRENT_TAG_NAME=$(git describe --tags --abbrev=0)
-          echo "Current tag in this repo: $CURRENT_TAG_NAME"
-          echo "CURRENT_TAG_NAME=$CURRENT_TAG_NAME" >> $GITHUB_ENV
+          CURRENT_XRAY_TAG=$(git describe --tags --abbrev=0)
+          echo "Current xray-core tag: $CURRENT_XRAY_TAG"
+          echo "CURRENT_XRAY_TAG=$CURRENT_XRAY_TAG" >> $GITHUB_ENV
 
-      - name: Compare tags
-        id: compare-tags
+      - name: Extract Go version from go.mod
+        id: extract-go-version
         run: |
-          if [ "$LATEST_TAG_NAME" != "$CURRENT_TAG_NAME" ]; then
-            echo "Tags are different. Updating..."
-            echo "needs_update=true" >> $GITHUB_ENV
-          else
-            echo "Tags are the same. No update needed."
-            echo "needs_update=false" >> $GITHUB_ENV
+          GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}')
+          MAJOR_MINOR_VERSION=$(echo $GO_VERSION | awk -F. '{print $1"."$2}')
+          echo "Current Go version: $GO_VERSION"
+          echo "Major.Minor version: $MAJOR_MINOR_VERSION"
+          echo "GO_VERSION=$GO_VERSION" >> $GITHUB_ENV
+          echo "MAJOR_MINOR_VERSION=$MAJOR_MINOR_VERSION" >> $GITHUB_ENV
+
+      - name: Fetch latest Go version
+        id: fetch-latest-go-version
+        run: |
+          LATEST_GO_TAG=$(curl -s https://api.github.com/repos/actions/go-versions/tags | \
+            jq -r "[.[] | select(.name | startswith(\"${{ env.MAJOR_MINOR_VERSION }}.\"))] | 
+            sort_by(.name) | last | .name" | cut -d'-' -f1)
+          
+          echo "Latest Go version for ${{ env.MAJOR_MINOR_VERSION }} branch: $LATEST_GO_TAG"
+          echo "LATEST_GO_TAG=$LATEST_GO_TAG" >> $GITHUB_ENV
+
+      - name: Prepare updates
+        id: prepare-updates
+        run: |
+          XRAY_NEEDS_UPDATE=false
+          GO_NEEDS_UPDATE=false
+
+          # if xray or go need use specific version, change to false
+          if [ "$LATEST_XRAY_TAG_NAME" != "$CURRENT_XRAY_TAG" ]; then
+            XRAY_NEEDS_UPDATE=true
           fi
 
+          if [ "$LATEST_GO_TAG" != "$GO_VERSION" ]; then
+            GO_NEEDS_UPDATE=true
+          fi
+
+          echo "XRAY_NEEDS_UPDATE=$XRAY_NEEDS_UPDATE" >> $GITHUB_ENV
+          echo "GO_NEEDS_UPDATE=$GO_NEEDS_UPDATE" >> $GITHUB_ENV
+
       - name: Setup Golang
-        if: env.needs_update == 'true'
+        if: env.XRAY_NEEDS_UPDATE == 'true' || env.GO_NEEDS_UPDATE == 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
 
-      - name: Update and commit changes
-        if: env.needs_update == 'true'
+      - name: Update dependencies
+        if: env.XRAY_NEEDS_UPDATE == 'true' || env.GO_NEEDS_UPDATE == 'true'
         run: |
-          go get github.com/xtls/xray-core@${{ env.LATEST_TAG_SHA }}
+          # Update xray-core if needed
+          if [ "$XRAY_NEEDS_UPDATE" = "true" ]; then
+            go get github.com/xtls/xray-core@${{ env.LATEST_XRAY_TAG_SHA }}
+            echo "Updated xray-core to ${{ env.LATEST_XRAY_TAG_NAME }}"
+          fi
+
+          # Update Go version if needed
+          if [ "$GO_NEEDS_UPDATE" = "true" ]; then
+            sed -i "s/^go $GO_VERSION/go ${{ env.LATEST_GO_TAG }}/" go.mod
+            echo "Updated Go version from $GO_VERSION to ${{ env.LATEST_GO_TAG }}"
+          fi
+
           go mod tidy -v
           git diff
 
       - name: Commit and push changes
-        id: auto-commit-action
-        if: env.needs_update == 'true'
+        if: env.XRAY_NEEDS_UPDATE == 'true' || env.GO_NEEDS_UPDATE == 'true'
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
-          commit_message: Updating xray-core to ${{ env.LATEST_TAG_NAME }} ${{ env.LATEST_TAG_SHA }}
-          tagging_message: ${{ env.LATEST_TAG_NAME }}
+          commit_message: >
+            Update dependencies:
+            ${{ env.XRAY_NEEDS_UPDATE == 'true' && format('xray-core to {0}', env.LATEST_XRAY_TAG_NAME) || '' }}
+            ${{ env.GO_NEEDS_UPDATE == 'true' && format('&Go version to {0}', env.LATEST_GO_TAG) || '' }}
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+          commit_author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
 
-      - name: Trigger build
-        if: env.needs_update == 'true' && steps.auto-commit-action.outputs.changes_detected == 'true'
+      - name: Trigger workflow
+        if: env.XRAY_NEEDS_UPDATE == 'true'
         run: |
           curl -X POST \
             -H "Accept: application/vnd.github.v3+json" \
@@ -77,6 +118,6 @@ jobs:
             -d "{
               \"ref\": \"main\",
               \"inputs\": {
-                \"release_tag\": \"${{ env.LATEST_TAG_NAME }}\"
+                \"release_tag\": \"${{ env.LATEST_XRAY_TAG_NAME }}\"
               }
             }"
