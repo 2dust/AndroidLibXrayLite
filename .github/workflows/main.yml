@@ -4,8 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        required: true
+        required: false
         type: string
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -55,6 +61,7 @@ jobs:
         ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
     - name: Upload AndroidLibXrayLite to release
+      if: github.event.inputs.release_tag != ''
       uses: svenstaro/upload-release-action@v2
       with:
         file: ./libv2ray*r
