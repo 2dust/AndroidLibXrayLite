@@ -11,11 +11,19 @@ __base="$(basename "${__file}" .sh)"
 
 DATADIR="${__dir}/data"
 
+# Ensure the data directory exists
+mkdir -p "$DATADIR"
+
 # Function to handle errors
 error_exit() {
     echo -e "Aborted, error $? in command: $BASH_COMMAND"
-    rm -rf "$TMPDIR"
+    [[ -d "${TMPDIR:-}" ]] && rm -rf "$TMPDIR"
     exit 1
+}
+
+# Function to log messages with timestamps
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
 # Compile data function
@@ -24,32 +32,37 @@ compile_dat() {
     trap 'error_exit' ERR
 
     local GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
-    
+
+    log "Checking geosite repository..."
     if [[ -d ${GEOSITE} ]]; then
-        cd "${GEOSITE}" && git pull
+        (cd "${GEOSITE}" && git pull --quiet)
+        log "Geosite repository updated."
     else
-        git clone https://github.com/v2ray/domain-list-community.git "${GEOSITE}"
-        cd "${GEOSITE}"
+        git clone --quiet https://github.com/v2ray/domain-list-community.git "${GEOSITE}"
+        log "Geosite repository cloned."
     fi
     
-    go run main.go
+    (cd "${GEOSITE}" && go run main.go)
 
-    if [[ -e dlc.dat ]]; then
-        mv -f dlc.dat "$DATADIR/geosite.dat"
-        echo "----------> geosite.dat updated."
+    if [[ -e "${GEOSITE}/dlc.dat" ]]; then
+        mv -f "${GEOSITE}/dlc.dat" "$DATADIR/geosite.dat"
+        log "geosite.dat updated successfully."
     else
-        echo "----------> geosite.dat failed to update."
+        log "Failed to update geosite.dat."
     fi
 
     if [[ ! -x "$GOPATH/bin/geoip" ]]; then
-        go get -v -u github.com/v2ray/geoip
+        log "Installing geoip tool..."
+        go install github.com/v2ray/geoip@latest
+        log "geoip tool installed."
     fi
 
     cd "$TMPDIR"
     
-    curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
+    log "Downloading GeoLite2 data..."
+    curl -sSL -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
     unzip -q GeoLite2-Country-CSV.zip
-    mkdir geoip && find . -name '*.csv' -exec mv -t ./geoip {} +
+    mkdir geoip && mv *.csv geoip/
 
     "$GOPATH/bin/geoip" \
         --country=./geoip/GeoLite2-Country-Locations-en.csv \
@@ -58,9 +71,9 @@ compile_dat() {
 
     if [[ -e geoip.dat ]]; then
         mv -f geoip.dat "$DATADIR/geoip.dat"
-        echo "----------> geoip.dat updated."
+        log "geoip.dat updated successfully."
     else
-        echo "----------> geoip.dat failed to update."
+        log "Failed to update geoip.dat."
     fi
     
     trap - ERR  # Disable error trap
@@ -68,19 +81,42 @@ compile_dat() {
 
 # Download data function
 download_dat() {
-    wget -qO - https://api.github.com/repos/dyhkwong/v2ray-geoip/releases/latest \
-        | jq -r .assets[].browser_download_url | grep geoip.dat \
-        | xargs wget -O "$DATADIR/geoip.dat"
+    log "Fetching latest geoip.dat URL..."
+    local GEOIP_URL=$(wget -qO - https://api.github.com/repos/dyhkwong/v2ray-geoip/releases/latest | jq -r .assets[].browser_download_url | grep geoip.dat || true)
+    
+    if [[ -n $GEOIP_URL ]]; then
+        wget -qO "$DATADIR/geoip.dat" "$GEOIP_URL"
+        log "geoip.dat downloaded successfully."
+    else
+        log "Failed to fetch geoip.dat URL or download the file."
+    fi
 
-    wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest \
-        | grep browser_download_url | cut -d '"' -f 4 \
-        | xargs wget -O "$DATADIR/geosite.dat"
+    log "Fetching latest geosite.dat URL..."
+    local GEOSITE_URL=$(wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest | grep browser_download_url | cut -d '"' -f 4 || true)
+    
+    if [[ -n $GEOSITE_URL ]]; then
+        wget -qO "$DATADIR/geosite.dat" "$GEOSITE_URL"
+        log "geosite.dat downloaded successfully."
+    else
+        log "Failed to fetch geosite.dat URL or download the file."
+    fi
 }
 
-# Main execution logic
+# Main execution logic with input validation
 ACTION="${1:-download}"
 
 case $ACTION in
-    "download") download_dat ;;
-    "compile") compile_dat ;;
+    "download") 
+        download_dat 
+        ;;
+        
+    "compile") 
+        compile_dat 
+        ;;
+        
+    *)
+        echo "Invalid action: $ACTION. Use 'download' or 'compile'."
+        exit 1
+        ;;
 esac
+
