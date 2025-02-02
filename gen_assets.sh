@@ -97,6 +97,10 @@ download_dat() {
         | xargs wget -O "$DATADIR/geosite.dat"
 }
 
+# Ensure necessary directories exist
+ensure_dir "assets"
+ensure_dir "data"
+
 # Main execution logic
 ACTION="${1:-download}"
 
