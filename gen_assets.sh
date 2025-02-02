@@ -18,6 +18,23 @@ error_exit() {
     exit 1
 }
 
+# Function to ensure directory exists
+ensure_dir() {
+    local dir=$1
+    [[ ! -d "$dir" ]] && mkdir -p "$dir"
+}
+
+# Function to update or clone a repository
+update_or_clone_repo() {
+    local repo_dir=$1
+    local repo_url=$2
+    if [[ -d "$repo_dir" ]]; then
+        (cd "$repo_dir" && git pull)
+    else
+        git clone "$repo_url" "$repo_dir"
+    fi
+}
+
 # Compile data function
 compile_dat() {
     TMPDIR=$(mktemp -d)
@@ -26,13 +43,9 @@ compile_dat() {
     local GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
 
     # Clone or update the geosite repository
-    if [[ -d ${GEOSITE} ]]; then
-        (cd "${GEOSITE}" && git pull)
-    else
-        git clone https://github.com/v2ray/domain-list-community.git "${GEOSITE}"
-    fi
+    update_or_clone_repo "$GEOSITE" "https://github.com/v2ray/domain-list-community.git"
     
-    (cd "${GEOSITE}" && go run main.go)
+    (cd "$GEOSITE" && go run main.go)
 
     # Update geosite.dat if dlc.dat exists
     if [[ -e "${GEOSITE}/dlc.dat" ]]; then
@@ -67,11 +80,14 @@ compile_dat() {
         echo "----------> geoip.dat failed to update."
     fi
     
+    rm -rf "$TMPDIR"
     trap - ERR  # Disable error trap
 }
 
 # Download data function
 download_dat() {
+    ensure_dir "$DATADIR"
+    
     wget -qO - https://api.github.com/repos/dyhkwong/v2ray-geoip/releases/latest \
         | jq -r .assets[].browser_download_url | grep geoip.dat \
         | xargs wget -O "$DATADIR/geoip.dat"
@@ -87,4 +103,5 @@ ACTION="${1:-download}"
 case $ACTION in
     "download") download_dat ;;
     "compile") compile_dat ;;
+    *) echo "Invalid action: $ACTION"; exit 1 ;;
 esac
