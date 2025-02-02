@@ -72,23 +72,13 @@ compile_dat() {
 
 # Download data function
 download_dat() {
-    local GEOIP_URL=$(wget -qO - https://api.github.com/repos/dyhkwong/v2ray-geoip/releases/latest | jq -r .assets[].browser_download_url | grep geoip.dat)
-    
-    if [[ -n $GEOIP_URL ]]; then
-        wget -O "$DATADIR/geoip.dat" "$GEOIP_URL"
-        echo "----------> geoip.dat downloaded."
-    else
-        echo "----------> Failed to download geoip.dat."
-    fi
+    wget -qO - https://api.github.com/repos/dyhkwong/v2ray-geoip/releases/latest \
+        | jq -r .assets[].browser_download_url | grep geoip.dat \
+        | xargs wget -O "$DATADIR/geoip.dat"
 
-    local GEOSITE_URL=$(wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest | grep browser_download_url | cut -d '"' -f 4)
-    
-    if [[ -n $GEOSITE_URL ]]; then
-        wget -O "$DATADIR/geosite.dat" "$GEOSITE_URL"
-        echo "----------> geosite.dat downloaded."
-    else
-        echo "----------> Failed to download geosite.dat."
-    fi
+    wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest \
+        | grep browser_download_url | cut -d '"' -f 4 \
+        | xargs wget -O "$DATADIR/geosite.dat"
 }
 
 # Main execution logic
