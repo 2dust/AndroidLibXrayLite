@@ -10,6 +10,7 @@ __file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
 __base="$(basename "${__file}" .sh)"
 
 DATADIR="${__dir}/data"
+ASSETSDIR="${__dir}/assets"
 
 # Function to handle errors
 error_exit() {
@@ -98,8 +99,8 @@ download_dat() {
 }
 
 # Ensure necessary directories exist
-ensure_dir "assets"
-ensure_dir "data"
+ensure_dir "$ASSETSDIR"
+ensure_dir "$DATADIR"
 
 # Main execution logic
 ACTION="${1:-download}"
