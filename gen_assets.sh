@@ -11,19 +11,11 @@ __base="$(basename "${__file}" .sh)"
 
 DATADIR="${__dir}/data"
 
-# Ensure the data directory exists
-mkdir -p "$DATADIR"
-
 # Function to handle errors
 error_exit() {
     echo -e "Aborted, error $? in command: $BASH_COMMAND"
-    [[ -d "${TMPDIR:-}" ]] && rm -rf "$TMPDIR"
+    [[ -d "$TMPDIR" ]] && rm -rf "$TMPDIR"
     exit 1
-}
-
-# Function to log messages with timestamps
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
 # Compile data function
@@ -33,34 +25,32 @@ compile_dat() {
 
     local GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
 
-    log "Checking geosite repository..."
+    # Clone or update the geosite repository
     if [[ -d ${GEOSITE} ]]; then
-        (cd "${GEOSITE}" && git pull --quiet)
-        log "Geosite repository updated."
+        (cd "${GEOSITE}" && git pull)
     else
-        git clone --quiet https://github.com/v2ray/domain-list-community.git "${GEOSITE}"
-        log "Geosite repository cloned."
+        git clone https://github.com/v2ray/domain-list-community.git "${GEOSITE}"
     fi
     
     (cd "${GEOSITE}" && go run main.go)
 
+    # Update geosite.dat if dlc.dat exists
     if [[ -e "${GEOSITE}/dlc.dat" ]]; then
         mv -f "${GEOSITE}/dlc.dat" "$DATADIR/geosite.dat"
-        log "geosite.dat updated successfully."
+        echo "----------> geosite.dat updated."
     else
-        log "Failed to update geosite.dat."
+        echo "----------> geosite.dat failed to update."
     fi
 
+    # Install geoip if not already installed
     if [[ ! -x "$GOPATH/bin/geoip" ]]; then
-        log "Installing geoip tool..."
-        go install github.com/v2ray/geoip@latest
-        log "geoip tool installed."
+        go get -v -u github.com/v2ray/geoip
     fi
 
     cd "$TMPDIR"
     
-    log "Downloading GeoLite2 data..."
-    curl -sSL -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
+    # Download and process GeoLite2 data
+    curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
     unzip -q GeoLite2-Country-CSV.zip
     mkdir geoip && mv *.csv geoip/
 
@@ -69,11 +59,12 @@ compile_dat() {
         --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
         --ipv6=./geoip/GeoLite2-Country-Blocks-IPv6.csv
 
+    # Update geoip.dat if it exists
     if [[ -e geoip.dat ]]; then
         mv -f geoip.dat "$DATADIR/geoip.dat"
-        log "geoip.dat updated successfully."
+        echo "----------> geoip.dat updated."
     else
-        log "Failed to update geoip.dat."
+        echo "----------> geoip.dat failed to update."
     fi
     
     trap - ERR  # Disable error trap
@@ -81,42 +72,30 @@ compile_dat() {
 
 # Download data function
 download_dat() {
-    log "Fetching latest geoip.dat URL..."
-    local GEOIP_URL=$(wget -qO - https://api.github.com/repos/dyhkwong/v2ray-geoip/releases/latest | jq -r .assets[].browser_download_url | grep geoip.dat || true)
+    local GEOIP_URL=$(wget -qO - https://api.github.com/repos/dyhkwong/v2ray-geoip/releases/latest | jq -r .assets[].browser_download_url | grep geoip.dat)
     
     if [[ -n $GEOIP_URL ]]; then
-        wget -qO "$DATADIR/geoip.dat" "$GEOIP_URL"
-        log "geoip.dat downloaded successfully."
+        wget -O "$DATADIR/geoip.dat" "$GEOIP_URL"
+        echo "----------> geoip.dat downloaded."
     else
-        log "Failed to fetch geoip.dat URL or download the file."
+        echo "----------> Failed to download geoip.dat."
     fi
 
-    log "Fetching latest geosite.dat URL..."
-    local GEOSITE_URL=$(wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest | grep browser_download_url | cut -d '"' -f 4 || true)
+    local GEOSITE_URL=$(wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest | grep browser_download_url | cut -d '"' -f 4)
     
     if [[ -n $GEOSITE_URL ]]; then
-        wget -qO "$DATADIR/geosite.dat" "$GEOSITE_URL"
-        log "geosite.dat downloaded successfully."
+        wget -O "$DATADIR/geosite.dat" "$GEOSITE_URL"
+        echo "----------> geosite.dat downloaded."
     else
-        log "Failed to fetch geosite.dat URL or download the file."
+        echo "----------> Failed to download geosite.dat."
     fi
 }
 
-# Main execution logic with input validation
+# Main execution logic
 ACTION="${1:-download}"
 
 case $ACTION in
-    "download") 
-        download_dat 
-        ;;
-        
-    "compile") 
-        compile_dat 
-        ;;
-        
-    *)
-        echo "Invalid action: $ACTION. Use 'download' or 'compile'."
-        exit 1
-        ;;
+    "download") download_dat ;;
+    "compile") compile_dat ;;
 esac
 
