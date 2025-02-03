@@ -157,24 +157,24 @@ func (d *ProtectedDialer) PrepareDomain(domainName string, closeCh <-chan struct
 			continue
 		}
 
-		d.vServer = resolved
-		log.Printf("Prepare Result:\n Domain: %s\n Port: %d\n IPs: %v\n",
-			resolved.domain, resolved.Port, resolved.IPs)
-		return
-	}
-	log.Println("PrepareDomain maxRetry reached. Exiting.")
+        d.vServer = resolved
+        log.Printf("Prepare Result:\n Domain: %s\n Port: %d\n IPs: %v\n",
+            resolved.domain, resolved.Port, resolved.IPs)
+        return
+    }
+    log.Println("PrepareDomain maxRetry reached. Exiting.")
 }
 
 // getFd retrieves a file descriptor for the specified network type.
 func (d *ProtectedDialer) getFd(network v2net.Network) (int, error) {
 	switch network {
 	case v2net.Network_TCP:
-		return unix.Socket(unix.AF_INET6, unix.SOCK_STREAM, unix.IPPROTO_TCP)
+	    return unix.Socket(unix.AF_INET6, unix.SOCK_STREAM, unix.IPPROTO_TCP)
 	case v2net.Network_UDP:
-		return unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
+	    return unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM, unix.IPPROTO_UDP)
 	default:
-		return -1, fmt.Errorf("unknown network type")
-	}
+	    return -1, fmt.Errorf("unknown network type")
+    }
 }
 
 // Init implements internet.SystemDialer.
@@ -187,33 +187,33 @@ func (d *ProtectedDialer) Dial(ctx context.Context,
 	address := dest.NetAddr()
 
 	if address == d.currentServer {
-		if d.vServer == nil {
-			log.Println("Dial pending preparation...", address)
-			select {
-			case <-d.resolveChan:
-				if d.vServer == nil {
-					return nil, fmt.Errorf("failed to prepare domain %s", d.currentServer)
-				}
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-				return nil, errors.New("preparation in progress")
-			}
-		}
+	    if d.vServer == nil {
+	        log.Println("Dial pending preparation...", address)
+	        select {
+	        case <-d.resolveChan:
+	            if d.vServer == nil {
+	                return nil, fmt.Errorf("failed to prepare domain %s", d.currentServer)
+	            }
+	        case <-ctx.Done():
+	            return nil, ctx.Err()
+	        default:
+	            return nil, errors.New("preparation in progress")
+	        }
+	    }
 
-        fd, err := d.getFd(dest.Network)
-        if err != nil {
-            return nil, err
-        }
+	    fd, err := d.getFd(dest.Network)
+	    if err != nil {
+	        return nil, err
+	    }
 
-        curIP := d.vServer.currentIP()
-        conn, err := d.fdConn(ctx, curIP, d.vServer.Port, dest.Network, fd)
-        if err != nil {
-            d.vServer.NextIP()
-            return nil, err
-        }
-        log.Printf("Using Prepared IP: %s", curIP)
-        return conn, nil
+	    curIP := d.vServer.currentIP()
+	    conn, err := d.fdConn(ctx, curIP, d.vServer.Port, dest.Network, fd)
+	    if err != nil {
+	        d.vServer.NextIP()
+	        return nil, err
+	    }
+	    log.Printf("Using Prepared IP: %s", curIP)
+	    return conn, nil
     }
 
     log.Printf("Not Using Prepared: %s,%s", dest.Network.SystemString(), address)
