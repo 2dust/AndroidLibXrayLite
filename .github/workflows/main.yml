@@ -1,32 +1,103 @@
-name: Deploy Foxx Org
+name: Build
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        required: false
+        type: string
+  pull_request:
+    branches:
+      - main
   push:
     branches:
-      - master
-    paths:
-      - libs/server/org/org-foxx/**
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     env:
-      HOST: redacted.redacted.org
-      DATABASE: wb-org-test
-      ENDPOINT: /org-api
+      GOBIN: $HOME/go/bin
+      PATH: $HOME/go/bin:$PATH
 
     steps:
-    - uses: actions/checkout@v2
 
-    - name: Install tar
+    # Step 1: Checkout the repository
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Install tar if missing
+    - name: Install tar if missing
       run: sudo apt-get update && sudo apt-get install -y tar
 
-    - name: Install Foxx CLI
-      run: sudo npm i -g foxx-cli
+    # Cache Go modules to improve build speed
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: /home/runner/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
 
-    - name: Add Database
-      run: foxx server set arango https://root:"${{ secrets.ARANGO_TEST_PWD }}"@${{ env.HOST }} -D ${{ env.DATABASE }}
+    # Setup Golang using go.mod file
+    - name: Setup Golang
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
 
-    - name: Upload Service
-      run: cd libs/server/org/org-foxx && foxx upgrade --server arango ${{ env.ENDPOINT }}
+    # Install gomobile and golangci-lint for mobile library building and code linting
+    - name: Install gomobile and golangci-lint
+      run: |
+        go install golang.org/x/mobile/cmd/gomobile@latest
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
+
+    # Setup Android NDK for building Android applications
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      id: setup-ndk
+      with:
+        ndk-version: r27
+
+    # Restore Android symlinks (optional)
+    - name: Restore Android Symlinks
+      run: |
+        directory="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        find "$directory" -type l | while read link; do
+            current_target=$(readlink "$link")
+            new_target="$directory/$(basename "$current_target")"
+            ln -sf "$new_target" "$link"
+            echo "Changed $(basename "$link") from $current_target to $new_target"
+        done
+
+    # Run linter and tests to ensure code quality
+    - name: Run Linter and Tests
+      run: |
+        golangci-lint run ./...
+        go test ./... -v -race
+
+    # Build project using gomobile and copy necessary files
+    - name: Build Project
+      run: |
+         mkdir -p assets data
+         bash gen_assets.sh download || echo "No assets to download"
+         cp -v data/*.dat assets/ || echo "No data files to copy"
+         gomobile init || echo "Gomobile already initialized"
+         go mod tidy || echo "No changes in dependencies"
+         gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
+      env:
+        ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+    # Clean up temporary files to save disk space (optional)
+    - name: Clean up temporary files
+      run: |
+        rm -rf assets data *.tmp
+
+    # Upload built files to Release if release_tag is provided
+    - name: Upload AndroidLibXrayLite to release
+      if: github.event.inputs.release_tag != ''
+      uses: svenstaro/upload-release-action@v2
+      with:
+        file_glob: true 
+        file: ./libv2ray*.aar 
+        tag: ${{ github.event.inputs.release_tag }}
