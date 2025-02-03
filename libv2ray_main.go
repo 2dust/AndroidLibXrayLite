@@ -61,46 +61,30 @@ type V2RayVPNServiceSupportsSet interface {
 }
 
 // RunLoop Run V2Ray main loop
-func (v *V2RayPoint) RunLoop(prefIPv6 bool) (err error) {
+func (v *V2RayPoint) RunLoop(prefIPv6 bool) error {
     v.v2rayOP.Lock()
     defer v.v2rayOP.Unlock()
 
-    if !v.IsRunning {
-        v.closeChan = make(chan struct{})
-        v.dialer.PrepareResolveChan()
-        go func() {
-            select {
-            // wait until resolved
-            case <-v.dialer.ResolveChan():
-                // shutdown VPNService if server name can not be resolved
-                if !v.dialer.IsVServerReady() {
-                    log.Println("vServer cannot be resolved, shutdown")
-                    v.StopLoop()
-                    v.SupportSet.Shutdown()
-                }
-
-            // stop waiting if manually closed
-            case <-v.closeChan:
-            }
-        }()
-
-        if v.AsyncResolve {
-            go func() {
-                v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
-                close(v.dialer.ResolveChan())
-            }()
-        } else {
-            v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
-            close(v.dialer.ResolveChan())
-        }
-
-        err = v.pointloop()
+    if v.IsRunning {
+        return nil
     }
-    return
+
+    v.closeChan = make(chan struct{})
+    v.dialer.PrepareResolveChan()
+
+    go v.handleDomainResolution(prefIPv6)
+
+    if v.AsyncResolve {
+        go v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
+    } else {
+        v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
+    }
+
+    return v.pointloop()
 }
 
 // StopLoop Stop V2Ray main loop
-func (v *V2RayPoint) StopLoop() (err error) {
+func (v *V2RayPoint) StopLoop() error {
     v.v2rayOP.Lock()
     defer v.v2rayOP.Unlock()
     if v.IsRunning {
@@ -108,7 +92,7 @@ func (v *V2RayPoint) StopLoop() (err error) {
         v.shutdownInit()
         v.SupportSet.OnEmitStatus(0, "Closed")
     }
-    return
+    return nil
 }
 
 // QueryStats queries statistics
@@ -163,11 +147,11 @@ func (v *V2RayPoint) pointloop() error {
 
 func (v *V2RayPoint) MeasureDelay(url string) (int64, error) {
     ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+    defer cancel()
 
     go func() {
         select {
         case <-v.closeChan:
-            // cancel request if close called during measure
             cancel()
         case <-ctx.Done():
         }
@@ -178,8 +162,6 @@ func (v *V2RayPoint) MeasureDelay(url string) (int64, error) {
 
 // InitV2Env set v2 asset path
 func InitV2Env(envPath string, key string) {
-    //Initialize asset API, Since Raymond Will not let notify the asset location inside Process,
-    //We need to set location outside V2Ray
     if len(envPath) > 0 {
         os.Setenv(v2Asset, envPath)
     }
@@ -187,7 +169,6 @@ func InitV2Env(envPath string, key string) {
         os.Setenv(xudpBaseKey, key)
     }
 
-    //Now we handle read, fallback to gomobile asset (apk assets)
     v2filesystem.NewFileReader = func(path string) (io.ReadCloser, error) {
         if _, err := os.Stat(path); os.IsNotExist(err) {
             _, file := filepath.Split(path)
@@ -204,10 +185,8 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
         return -1, err
     }
 
-    // don't listen to anything for test purpose
     config.Inbound = nil
-    // config.App: (fakedns), log, dispatcher, InboundConfig, OutboundConfig, (stats), router, dns, (policy)
-    // keep only basic features
+
     var essentialApp []*serial.TypedMessage
     for _, app := range config.App {
         if app.Type == "xray.app.proxyman.OutboundConfig" || app.Type == "xray.app.dispatcher.Config" || app.Type == "xray.app.log.Config" {
@@ -229,7 +208,6 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 // NewV2RayPoint creates a new V2RayPoint
 func NewV2RayPoint(s V2RayVPNServiceSupportsSet, adns bool) *V2RayPoint {
-    // inject our own log writer
     v2applog.RegisterHandlerCreator(v2applog.LogType_Console,
         func(lt v2applog.LogType,
             options v2applog.HandlerCreatorOptions) (v2commlog.Handler, error) {
@@ -273,7 +251,7 @@ func measureInstDelay(ctx context.Context, inst *v2core.Instance, url string) (i
         Timeout:   12 * time.Second,
     }
 
-    if len(url) <= 0 {
+    if len(url) == 0 {
         url = "https://www.google.com/generate_204"
     }
     req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -310,5 +288,18 @@ func createStdoutLogWriter() v2commlog.WriterCreator {
     return func() v2commlog.Writer {
         return &consoleLogWriter{
             logger: log.New(os.Stdout, "", 0)}
+    }
+}
+
+// handleDomainResolution handles the domain resolution process
+func (v *V2RayPoint) handleDomainResolution(prefIPv6 bool) {
+    select {
+    case <-v.dialer.ResolveChan():
+        if !v.dialer.IsVServerReady() {
+            log.Println("vServer cannot be resolved, shutdown")
+            v.StopLoop()
+            v.SupportSet.Shutdown()
+        }
+    case <-v.closeChan:
     }
 }
