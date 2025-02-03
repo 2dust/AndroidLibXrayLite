@@ -28,7 +28,7 @@ jobs:
       - name: Fetch current repository release tag
         id: fetch-current-tag
         run: |
-          CURRENT_TAG_NAME=$(git describe --tags --abbrev=0)
+          CURRENT_TAG_NAME=$(git describe --tags --abbrev=0 || echo "none")
           echo "Current tag in this repo: $CURRENT_TAG_NAME"
           echo "CURRENT_TAG_NAME=$CURRENT_TAG_NAME" >> $GITHUB_ENV
 
@@ -48,6 +48,15 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+
+      - name: Cache Go modules
+        if: env.needs_update == 'true'
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/go/bin
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod') }}
 
       - name: Update and commit changes
         if: env.needs_update == 'true'
