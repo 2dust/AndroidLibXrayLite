@@ -1,89 +1,32 @@
-name: Build
+name: Deploy Foxx Org
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        required: false
-        type: string
-  pull_request:
-    branches:
-      - main
   push:
     branches:
-      - main
+      - master
+    paths:
+      - libs/server/org/org-foxx/**
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     env:
-      GOBIN: $HOME/go/bin
-      PATH: $HOME/go/bin:$PATH
+      HOST: redacted.redacted.org
+      DATABASE: wb-org-test
+      ENDPOINT: /org-api
 
     steps:
+    - uses: actions/checkout@v2
 
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - name: Install tar
+      run: sudo apt-get update && sudo apt-get install -y tar
 
-    - name: Cache Go modules
-      uses: actions/cache@v3
-      with:
-        path: /home/runner/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+    - name: Install Foxx CLI
+      run: sudo npm i -g foxx-cli
 
-    - name: Setup Golang
-      uses: actions/setup-go@v5
-      with:
-        go-version-file: 'go.mod'
+    - name: Add Database
+      run: foxx server set arango https://root:"${{ secrets.ARANGO_TEST_PWD }}"@${{ env.HOST }} -D ${{ env.DATABASE }}
 
-    - name: Install gomobile and golangci-lint
-      run: |
-        go install golang.org/x/mobile/cmd/gomobile@latest
-        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
-
-    - name: Setup Android NDK
-      uses: nttld/setup-ndk@v1
-      id: setup-ndk
-      with:
-        ndk-version: r27
-
-    - name: Restore Android Symlinks
-      run: |
-        directory="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        find "$directory" -type l | while read link; do
-            current_target=$(readlink "$link")
-            new_target="$directory/$(basename "$current_target")"
-            ln -sf "$new_target" "$link"
-            echo "Changed $(basename "$link") from $current_target to $new_target"
-        done
-
-    - name: Run Linter and Tests
-      run: |
-        golangci-lint run ./...
-        go test ./... -v -race
-
-    - name: Build Project
-      run: |
-         mkdir -p assets data
-         bash gen_assets.sh download || echo "No assets to download"
-         cp -v data/*.dat assets/ || echo "No data files to copy"
-         gomobile init || echo "Gomobile already initialized"
-         go mod tidy || echo "No changes in dependencies"
-         gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
-      env:
-        ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-
-    - name: Clean up temporary files
-      run: |
-        rm -rf assets data *.tmp
-
-    - name: Upload AndroidLibXrayLite to release
-      if: github.event.inputs.release_tag != ''
-      uses: svenstaro/upload-release-action@v2
-      with:
-        file_glob: true 
-        file: ./libv2ray*.aar 
-        tag: ${{ github.event.inputs.release_tag }}
+    - name: Upload Service
+      run: cd libs/server/org/org-foxx && foxx upgrade --server arango ${{ env.ENDPOINT }}
