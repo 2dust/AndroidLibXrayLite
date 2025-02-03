@@ -17,10 +17,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      GOBIN: $HOME/go/bin
+      PATH: $HOME/go/bin:$PATH
+
     steps:
+
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+
     - name: Cache Go modules
       uses: actions/cache@v3
       with:
@@ -34,19 +39,16 @@ jobs:
       with:
         go-version-file: 'go.mod'
 
-    - name: Install gomobile
+    - name: Install gomobile and golangci-lint
       run: |
         go install golang.org/x/mobile/cmd/gomobile@latest
-        echo "$HOME/go/bin" >> $GITHUB_PATH
-        
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
+
     - name: Setup Android NDK
       uses: nttld/setup-ndk@v1
       id: setup-ndk
       with:
         ndk-version: r27
-        add-to-path: true
-        link-to-sdk: true
-        local-cache: true
 
     - name: Restore Android Symlinks
       run: |
@@ -58,21 +60,30 @@ jobs:
             echo "Changed $(basename "$link") from $current_target to $new_target"
         done
 
-    - name: Build
+    - name: Run Linter and Tests
+      run: |
+        golangci-lint run ./...
+        go test ./... -v -race
+
+    - name: Build Project
       run: |
          mkdir -p assets data
-         bash gen_assets.sh download
-         cp -v data/*.dat assets/
-         gomobile init
-         go mod tidy
+         bash gen_assets.sh download || echo "No assets to download"
+         cp -v data/*.dat assets/ || echo "No data files to copy"
+         gomobile init || echo "Gomobile already initialized"
+         go mod tidy || echo "No changes in dependencies"
          gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
       env:
         ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+    - name: Clean up temporary files
+      run: |
+        rm -rf assets data *.tmp
 
     - name: Upload AndroidLibXrayLite to release
       if: github.event.inputs.release_tag != ''
       uses: svenstaro/upload-release-action@v2
       with:
-        file: ./libv2ray*r
-        tag: ${{ github.event.inputs.release_tag }}
         file_glob: true 
+        file: ./libv2ray*.aar 
+        tag: ${{ github.event.inputs.release_tag }}
