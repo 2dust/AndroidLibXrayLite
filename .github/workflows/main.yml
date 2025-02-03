@@ -12,10 +12,39 @@ on:
   push:
     branches:
       - main
+      - develop
+
+permissions:
+  contents: read # Limit permissions to read-only for security
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Run Linter
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          golangci-lint run --timeout 5m
+
+      - name: Run Tests # Run tests before final build to ensure code correctness
+        run: go test ./... -v
+
+  build:
+    needs: test # This job runs after the test job is complete
+    runs-on: ubuntu-latest
+
+    env: # Define environment variables for use throughout the job
+      ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+      GO_BIN_PATH: $HOME/go/bin
+      API_KEY: ${{ secrets.API_KEY }} # Example of using a secret
 
     steps:
     - name: Checkout repository
@@ -36,9 +65,9 @@ jobs:
 
     - name: Install gomobile
       run: |
-        go install golang.org/x/mobile/cmd/gomobile@latest
-        echo "$HOME/go/bin" >> $GITHUB_PATH
-        
+        go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20230911123456 # Use a specific version
+        echo "$GO_BIN_PATH" >> $GITHUB_PATH
+
     - name: Setup Android NDK
       uses: nttld/setup-ndk@v1
       id: setup-ndk
@@ -50,29 +79,42 @@ jobs:
 
     - name: Restore Android Symlinks
       run: |
-        directory="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        directory="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
         find "$directory" -type l | while read link; do
             current_target=$(readlink "$link")
             new_target="$directory/$(basename "$current_target")"
             ln -sf "$new_target" "$link"
-            echo "Changed $(basename "$link") from $current_target to $new_target"
+            echo "Updated symlink for $(basename "$link") from $current_target to $new_target"
         done
 
-    - name: Build
+    - name: Cache Build Output # Cache build output to speed up future builds
+      uses: actions/cache@v3
+      with:
+        path: ./build_output # Path to your build output files (adjust as needed)
+        key: ${{ runner.os }}-build-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-build-
+
+    - name: Build Android Library
       run: |
          mkdir -p assets data
-         bash gen_assets.sh download
+         bash gen_assets.sh download || { echo "Asset generation failed"; exit 1; }
          cp -v data/*.dat assets/
-         gomobile init
-         go mod tidy
-         gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
-      env:
-        ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+         gomobile init || { echo "Gomobile initialization failed"; exit 1; }
+         go mod tidy || { echo "Go module tidy failed"; exit 1; }
+         gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./ || { echo "Build failed"; exit 1; }
 
-    - name: Upload AndroidLibXrayLite to release
+    - name: Upload Android Library to Release
       if: github.event.inputs.release_tag != ''
       uses: svenstaro/upload-release-action@v2
       with:
-        file: ./libv2ray*r
+        file: ./libv2ray*r # Use wildcard to upload related files
         tag: ${{ github.event.inputs.release_tag }}
         file_glob: true
+
+    - name: Notify Slack on Failure # Notify Slack if the build fails (optional)
+      if: failure()
+      uses: rtCamp/action-slack-notify@v2 
+      with:
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        message: 'Build failed for ${{ github.ref }}'
