@@ -12,14 +12,23 @@ on:
   push:
     branches:
       - main
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
 
+    steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: /home/runner/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
     - name: Setup Golang
       uses: actions/setup-go@v5
       with:
@@ -28,7 +37,7 @@ jobs:
     - name: Install gomobile
       run: |
         go install golang.org/x/mobile/cmd/gomobile@latest
-        export PATH=$PATH:~/go/bin
+        echo "$HOME/go/bin" >> $GITHUB_PATH
         
     - name: Setup Android NDK
       uses: nttld/setup-ndk@v1
@@ -66,4 +75,4 @@ jobs:
       with:
         file: ./libv2ray*r
         tag: ${{ github.event.inputs.release_tag }}
-        file_glob: true
+        file_glob: true 
