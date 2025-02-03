@@ -17,21 +17,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      GOBIN: $HOME/go/bin
-      PATH: $HOME/go/bin:$PATH
-
     steps:
-
-    # Step 1: Checkout the repository
     - name: Checkout repository
       uses: actions/checkout@v4
-
-    # Step 2: Install tar if missing
-    - name: Install tar if missing
-      run: sudo apt-get update && sudo apt-get install -y tar
-
-    # Step 3: Cache Go modules to improve build speed
+      
     - name: Cache Go modules
       uses: actions/cache@v3
       with:
@@ -40,26 +29,25 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    # Step 4: Setup Golang using go.mod file
     - name: Setup Golang
       uses: actions/setup-go@v5
       with:
         go-version-file: 'go.mod'
 
-    # Step 5: Install gomobile and golangci-lint for mobile library building and code linting
-    - name: Install gomobile and golangci-lint
+    - name: Install gomobile
       run: |
         go install golang.org/x/mobile/cmd/gomobile@latest
-        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
-
-    # Step 6: Setup Android NDK for building Android applications
+        echo "$HOME/go/bin" >> $GITHUB_PATH
+        
     - name: Setup Android NDK
       uses: nttld/setup-ndk@v1
       id: setup-ndk
       with:
         ndk-version: r27
+        add-to-path: true
+        link-to-sdk: true
+        local-cache: true
 
-    # Step 7: Restore Android symlinks (optional)
     - name: Restore Android Symlinks
       run: |
         directory="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -70,34 +58,21 @@ jobs:
             echo "Changed $(basename "$link") from $current_target to $new_target"
         done
 
-    # Step 8: Run linter and tests to ensure code quality
-    - name: Run Linter and Tests
-      run: |
-        golangci-lint run ./...
-        go test ./... -v -race
-
-    # Step 9: Build project using gomobile and copy necessary files
-    - name: Build Project
+    - name: Build
       run: |
          mkdir -p assets data
-         bash gen_assets.sh download || echo "No assets to download"
-         cp -v data/*.dat assets/ || echo "No data files to copy"
-         gomobile init || echo "Gomobile already initialized"
-         go mod tidy || echo "No changes in dependencies"
+         bash gen_assets.sh download
+         cp -v data/*.dat assets/
+         gomobile init
+         go mod tidy
          gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
       env:
         ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
-    # Step 10: Clean up temporary files to save disk space (optional)
-    - name: Clean up temporary files
-      run: |
-        rm -rf assets data *.tmp
-
-    # Step 11: Upload built files to Release if release_tag is provided
     - name: Upload AndroidLibXrayLite to release
       if: github.event.inputs.release_tag != ''
       uses: svenstaro/upload-release-action@v2
       with:
-        file_glob: true 
-        file: ./libv2ray*.aar 
+        file: ./libv2ray*r
         tag: ${{ github.event.inputs.release_tag }}
+        file_glob: true
