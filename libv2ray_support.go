@@ -287,3 +287,19 @@ func (d *ProtectedDialer) fdConn(ctx context.Context, ip net.IP, port int,
 	    return conn, nil
     }
 }
+
+// Test for NewProtectedDialer function.
+func TestNewProtectedDialer(t *testing.T) {
+	mockProtectSet := &mockProtectSet{}
+	dialer := NewProtectedDialer(mockProtectSet)
+
+	if dialer == nil {
+        t.Errorf("NewProtectedDialer returned nil")
+    }
+}
+
+type mockProtectSet struct{}
+
+func (m mockProtectSet) Protect(fd int) bool {
+	return true // Always returns true for testing purposes.
+}
