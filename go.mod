@@ -1,6 +1,6 @@
 module github.com/2dust/AndroidLibXrayLite
 
-UpdateUpdate dependeciesgo 1.23.6
+go 1.23.6
 
 require (
 	github.com/xtls/xray-core v1.8.25-0.20250130105737-0a8470cb14eb
@@ -50,6 +50,6 @@ require (
 	google.golang.org/grpc v1.70.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20250206213433-da7cd03064d7 // indirect
+	gvisor.dev/gvisor v0.0.0-20241227193629-b8cde430ca0a // indirect
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
