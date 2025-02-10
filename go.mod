@@ -27,7 +27,7 @@ require (
 	github.com/quic-go/quic-go v0.49.0 // indirect
 	github.com/refraction-networking/utls v1.6.7 // indirect
 	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
-	github.com/sagernet/sing v0.6.0 // indirect
+	github.com/sagernet/sing v0.6.1 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
 	github.com/seiflotfy/cuckoofilter v0.0.0-20240715131351-a2f2c23f1771 // indirect
 	github.com/v2fly/ss-bloomring v0.0.0-20210312155135-28617310f63e // indirect
@@ -50,6 +50,6 @@ require (
 	google.golang.org/grpc v1.70.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20241227193629-b8cde430ca0a // indirect
+	gvisor.dev/gvisor v0.0.0-20250207210614-9c490f813d37 // indirect
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
