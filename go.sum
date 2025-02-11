@@ -75,8 +75,8 @@ github.com/vishvananda/netns v0.0.5 h1:DfiHV+j8bA32MFM7bfEunvT8IAqQ/NzSJHtcmW5zd
 github.com/vishvananda/netns v0.0.5/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 github.com/xtls/reality v0.0.0-20240909153216-e26ae2305463 h1:g1Cj7d+my6k/HHxLAyxPwyX8i7FGRr6ulBDMkBzg2BM=
 github.com/xtls/reality v0.0.0-20240909153216-e26ae2305463/go.mod h1:BjIOLmkEEtAgloAiVUcYj0Mt+YU00JARZw8AEU0IwAg=
-github.com/xtls/xray-core v1.8.25-0.20250209010635-6b6fbcb459a8 h1:skW6aFSoLlpgjpAZ1EgB+KKICgJECuJNno+c8PG/Odc=
-github.com/xtls/xray-core v1.8.25-0.20250209010635-6b6fbcb459a8/go.mod h1:3CIiFGvfTn/V7FKXz8j79ynHkf6QcTFOWLuQgfEQi2U=
+github.com/xtls/xray-core v1.8.25-0.20250130105737-0a8470cb14eb h1:VBzDZ4XHT9FM0S3qvXp6KuTOk7mXQQm0pjOW0Neeog4=
+github.com/xtls/xray-core v1.8.25-0.20250130105737-0a8470cb14eb/go.mod h1:EKhNEDY/WIB+ylEbVv2pzUaP08W/lt0sYmJQ9FJruko=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 go.opentelemetry.io/otel v1.32.0 h1:WnBN+Xjcteh0zdk01SVqV55d/m62NJLJdIyb4y/WO5U=
@@ -101,8 +101,8 @@ golang.org/x/mobile v0.0.0-20250106192035-c31d5b91ecc3 h1:8LrYkH99trX3onYF3dT9fr
 golang.org/x/mobile v0.0.0-20250106192035-c31d5b91ecc3/go.mod h1:sY92m3V/rTEa4JCJ1FkKHK978K6wxOSX1PStMYo+6wI=
 golang.org/x/mod v0.23.0 h1:Zb7khfcRGKk+kqfxFaP5tZqCnDZMjC5VtUBs87Hr6QM=
 golang.org/x/mod v0.23.0/go.mod h1:6SkKJ3Xj0I0BrPOZoBy3bdMptDDU9oJrpohJ3eWZ1fY=
-golang.org/x/net v0.34.0 h1:Mb7Mrk043xzHgnRM88suvJFwzVrRfHEHJEl5/71CKw0=
-golang.org/x/net v0.34.0/go.mod h1:di0qlW3YNM5oh6GqDGQr92MyTozJPmybPK4Ev/Gm31k=
+golang.org/x/net v0.35.0 h1:T5GQRQb2y08kTAByq9L4/bz8cipCdA8FbRTXewonqY8=
+golang.org/x/net v0.35.0/go.mod h1:EglIi67kWsHKlRzzVMUD93VMSWGFOMSZgxFjparz1Qk=
 golang.org/x/sync v0.11.0 h1:GGz8+XQP4FvTTrjZPzNKTMFtSXH80RAzG+5ghFPgK9w=
 golang.org/x/sync v0.11.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=
 golang.org/x/sys v0.2.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
