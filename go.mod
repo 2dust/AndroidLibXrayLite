@@ -3,7 +3,6 @@ module github.com/2dust/AndroidLibXrayLite
 go 1.23.6
 
 require (
-	
 	github.com/xtls/xray-core v1.8.25-0.20250130105737-0a8470cb14eb
 	golang.org/x/mobile v0.0.0-20250106192035-c31d5b91ecc3
 	golang.org/x/sys v0.30.0
