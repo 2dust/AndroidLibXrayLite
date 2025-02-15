@@ -37,10 +37,10 @@ jobs:
         run: |
           if [ "$LATEST_TAG_NAME" != "$CURRENT_TAG_NAME" ]; then
               if [ "$(printf '%s\n' "$LATEST_TAG_NAME" "$CURRENT_TAG_NAME" | sort -V | tail -n1)" == "$CURRENT_TAG_NAME" ]; then 
+                echo "Upstream LATEST_TAG_NAME less than the CURRENT_TAG_NAME, no update needed."
+              else
                 echo "Tags are different. Updating..."
                 echo "needs_update=true" >> $GITHUB_ENV
-              else
-                echo "Upstream LATEST_TAG_NAME less than the CURRENT_TAG_NAME, no update needed."
               fi
           else
             echo "Tags are the same. No update needed."
