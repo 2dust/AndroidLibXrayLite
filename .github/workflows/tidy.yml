@@ -36,8 +36,12 @@ jobs:
         id: compare-tags
         run: |
           if [ "$LATEST_TAG_NAME" != "$CURRENT_TAG_NAME" ]; then
-            echo "Tags are different. Updating..."
-            echo "needs_update=true" >> $GITHUB_ENV
+              if [ "$(printf '%s\n' "$LATEST_TAG_NAME" "$CURRENT_TAG_NAME" | sort -V | tail -n1)" == "$CURRENT_TAG_NAME" ]; then 
+                echo "Tags are different. Updating..."
+                echo "needs_update=true" >> $GITHUB_ENV
+              else
+                echo "Upstream LATEST_TAG_NAME less than the CURRENT_TAG_NAME, no update needed."
+              fi
           else
             echo "Tags are the same. No update needed."
             echo "needs_update=false" >> $GITHUB_ENV
@@ -53,6 +57,8 @@ jobs:
         if: env.needs_update == 'true'
         run: |
           go get github.com/xtls/xray-core@${{ env.LATEST_TAG_SHA }}
+          go get gvisor.dev/gvisor@go
+          go get -u
           go mod tidy -v
           git diff
 
