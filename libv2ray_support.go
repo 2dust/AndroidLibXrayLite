@@ -302,7 +302,7 @@ func (d *ProtectedDialer) fdConn(ctx context.Context, ip net.IP, port int, netwo
 		}
 	} else {
 		if err := unix.Connect(fd, sa); err != nil {
-			log.Printf("fdConn unix.Connect err, Close Fd: %d Err: %v", fd, err)
+			// log.Printf("fdConn unix.Connect err, Close Fd: %d Err: %v", fd, err)
 			return nil, err
 		}
 	}
