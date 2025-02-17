@@ -260,7 +260,7 @@ func (d *ProtectedDialer) Dial(ctx context.Context,
 	}
 
 	// v2ray connecting to "domestic" servers, no caching results
-	log.Printf("Not Using Prepared: %s,%s", network, Address)
+	// log.Printf("Not Using Prepared: %s,%s", network, Address)
 	resolved, err := d.lookupAddr(Address)
 	if err != nil {
 		return nil, err
