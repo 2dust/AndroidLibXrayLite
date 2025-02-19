@@ -222,7 +222,7 @@ func (d *ProtectedDialer) Init(_ dns.Client, _ outbound.Manager) {
 func (d *ProtectedDialer) Dial(ctx context.Context,
 	src v2net.Address, dest v2net.Destination, sockopt *v2internet.SocketConfig) (net.Conn, error) {
 
-	network := dest.Network.SystemString()
+	// network := dest.Network.SystemString()
 	Address := dest.NetAddr()
 
 	// v2ray server address,
