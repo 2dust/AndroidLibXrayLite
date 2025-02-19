@@ -50,6 +50,6 @@ require (
 	google.golang.org/grpc v1.70.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20250218181608-84670a4fc612 // indirect
+	gvisor.dev/gvisor v0.0.0-20250215002057-313350f3e697 // indirect
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
