@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/OmarTariq612/goech v0.0.0- 20250215223220-1502361c4f1f // indirect
+	github.com/OmarTariq612/goech v0.0.0-20250215223220-1502361c4f1f // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/cloudflare/circl v1.6.0 // indirect
 	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33 // indirect
