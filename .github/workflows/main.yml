@@ -30,24 +30,19 @@ jobs:
         go install golang.org/x/mobile/cmd/gomobile@latest
         export PATH=$PATH:~/go/bin
         
-    - name: Setup Android NDK
-      uses: nttld/setup-ndk@v1
-      id: setup-ndk
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
       with:
-        ndk-version: r27
-        add-to-path: true
-        link-to-sdk: true
-        local-cache: true
+        log-accepted-android-sdk-licenses: false
+        cmdline-tools-version: '12266719'
+        packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
 
-    - name: Restore Android Symlinks
+    - name: Install NDK
       run: |
-        directory="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        find "$directory" -type l | while read link; do
-            current_target=$(readlink "$link")
-            new_target="$directory/$(basename "$current_target")"
-            ln -sf "$new_target" "$link"
-            echo "Changed $(basename "$link") from $current_target to $new_target"
-        done
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+          --channel=3 \
+          --install "ndk;29.0.13113456"
+        echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
 
     - name: Build
       run: |
@@ -57,8 +52,6 @@ jobs:
          gomobile init
          go mod tidy
          gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
-      env:
-        ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
     - name: Upload AndroidLibXrayLite to release
       if: github.event.inputs.release_tag != ''
