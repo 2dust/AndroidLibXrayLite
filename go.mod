@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/OmarTariq612/goech v0.0.1 // indirect
+	github.com/OmarTariq612/goech v0.0.0-20240405204721-8e2e1dafd3a0 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/cloudflare/circl v1.6.0 // indirect
 	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33 // indirect
@@ -50,6 +50,6 @@ require (
 	google.golang.org/grpc v1.71.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20250320222944-738e1d995f64 // indirect
+	gvisor.dev/gvisor v0.0.0-20250215002057-313350f3e697 // indirect
 	lukechampine.com/blake3 v1.4.0 // indirect
 )
