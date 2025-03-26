@@ -31,6 +31,7 @@ import (
 
 const (
 	v2Asset     = "xray.location.asset"
+	v2Cert      = "xray.location.cert"
 	xudpBaseKey = "xray.xudp.basekey"
 )
 
@@ -188,6 +189,7 @@ func InitV2Env(envPath string, key string) {
 	//We need to set location outside V2Ray
 	if len(envPath) > 0 {
 		os.Setenv(v2Asset, envPath)
+		os.Setenv(v2Cert, envPath)
 	}
 	if len(key) > 0 {
 		os.Setenv(xudpBaseKey, key)
