@@ -3,7 +3,21 @@ gradle/build.gradle
 *.pb.go
 binary*.go
 conf/demo/
-
 demo/
 assets/
 libv2ray*.[a|j]ar
+
+# Ignore binary files
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Ignore backup and temporary files
+*~
+*.swp
+*.swo
+
+# Ignore build and log directories
+build/
+logs/
