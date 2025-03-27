@@ -20,7 +20,7 @@ error_exit() {
 
 # Compile data function
 compile_dat() {
-    TMPDIR=$(mktemp -d)
+    TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/compile_dat.XXXXXX")
     trap 'error_exit' ERR
 
     local GEOSITE="${GOPATH}/src/github.com/Loyalsoldier/v2ray-rules-dat"
@@ -44,7 +44,7 @@ compile_dat() {
 
     # Install geoip if not already installed
     if [[ ! -x "$GOPATH/bin/geoip" ]]; then
-        go get -v -u github.com/v2ray/geoip
+        go install github.com/v2ray/geoip@latest
     fi
 
     cd "$TMPDIR"
@@ -87,4 +87,5 @@ ACTION="${1:-download}"
 case $ACTION in
     "download") download_dat ;;
     "compile") compile_dat ;;
+    *) echo "Invalid action: $ACTION" ; exit 1 ;;
 esac
