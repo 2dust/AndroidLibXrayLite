@@ -69,41 +69,41 @@ type V2RayVPNServiceSupportsSet interface {
 func (v *V2RayPoint) RunLoop(prefIPv6 bool) (err error) {
 	v.v2rayOP.Lock()
 	defer v.v2rayOP.Unlock()
-	//Construct Context
 
-	if !v.IsRunning {
-		v.closeChan = make(chan struct{})
-		v.dialer.PrepareResolveChan()
-		go func() {
-			select {
-			// wait until resolved
-			case <-v.dialer.ResolveChan():
-				// shutdown VPNService if server name can not resolved
-				if !v.dialer.IsVServerReady() {
-					log.Println("vServer cannot resolved, shutdown")
-					v.StopLoop()
-					v.SupportSet.Shutdown()
-				}
-
-			// stop waiting if manually closed
-			case <-v.closeChan:
-			}
-		}()
-
-		prepareDomain := func() {
-			v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
-			close(v.dialer.ResolveChan())
-		}
-
-		if v.AsyncResolve {
-			go prepareDomain()
-		} else {
-			prepareDomain()
-		}
-
-		err = v.pointloop()
+	if v.IsRunning {
+		return
 	}
+
+	v.closeChan = make(chan struct{})
+	v.dialer.PrepareResolveChan()
+
+	go v.handleResolve()
+
+	prepareDomain := func() {
+		v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
+		close(v.dialer.ResolveChan())
+	}
+
+	if v.AsyncResolve {
+		go prepareDomain()
+	} else {
+		prepareDomain()
+	}
+
+	err = v.pointloop()
 	return
+}
+
+func (v *V2RayPoint) handleResolve() {
+	select {
+	case <-v.dialer.ResolveChan():
+		if !v.dialer.IsVServerReady() {
+			log.Println("vServer cannot resolved, shutdown")
+			v.StopLoop()
+			v.SupportSet.Shutdown()
+		}
+	case <-v.closeChan:
+	}
 }
 
 /*StopLoop Stop V2Ray main loop
@@ -244,7 +244,7 @@ func NewV2RayPoint(s V2RayVPNServiceSupportsSet, adns bool) *V2RayPoint {
 			return v2commlog.NewLogger(createStdoutLogWriter()), nil
 		})
 
-	dialer := NewPreotectedDialer(s)
+	dialer := NewProtectedDialer(s)
 	v2internet.UseAlternativeSystemDialer(dialer)
 	return &V2RayPoint{
 		SupportSet:   s,
