@@ -33,7 +33,7 @@ func TestProtectedDialer_PrepareDomain(t *testing.T) {
 		// {"", args{"110.110.110.110:443"}},
 		// {"", args{"[2002:1234::1]:443"}},
 	}
-	d := NewProtectedDialer(fakeSupportSet{})
+	d := NewPreotectedDialer(fakeSupportSet{})
 	for _, tt := range tests {
 		ch := make(chan struct{})
 		t.Run(tt.name, func(t *testing.T) {
@@ -66,7 +66,7 @@ func TestProtectedDialer_Dial(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ch := make(chan struct{})
 
-			d := NewProtectedDialer(fakeSupportSet{})
+			d := NewPreotectedDialer(fakeSupportSet{})
 			d.currentServer = tt.name
 
 			go d.PrepareDomain(tt.name, ch, false)
