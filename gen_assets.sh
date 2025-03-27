@@ -23,13 +23,13 @@ compile_dat() {
     TMPDIR=$(mktemp -d)
     trap 'error_exit' ERR
 
-    local GEOSITE="${GOPATH}/src/github.com/v2ray/domain-list-community"
+    local GEOSITE="${GOPATH}/src/github.com/Loyalsoldier/v2ray-rules-dat"
 
-# Clone or update the geosite repository
+    # Clone or update the geosite repository
     if [[ -d ${GEOSITE} ]]; then
         (cd "${GEOSITE}" && git pull)
     else
-        git clone https://github.com/v2ray/domain-list-community.git "${GEOSITE}"
+        git clone https://github.com/Loyalsoldier/v2ray-rules-dat.git "${GEOSITE}"
     fi
     
     (cd "${GEOSITE}" && go run main.go)
@@ -72,11 +72,11 @@ compile_dat() {
 
 # Download data function
 download_dat() {
-    wget -qO - https://api.github.com/repos/v2ray/geoip/releases/latest \
+    wget -qO - https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest \
         | jq -r .assets[].browser_download_url | grep geoip.dat \
         | xargs wget -O "$DATADIR/geoip.dat"
 
-    wget -qO - https://api.github.com/repos/v2ray/domain-list-community/releases/latest \
+    wget -qO - https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest \
         | grep browser_download_url | cut -d '"' -f 4 \
         | xargs wget -O "$DATADIR/geosite.dat"
 }
