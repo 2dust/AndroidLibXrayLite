@@ -18,6 +18,12 @@ error_exit() {
     exit 1
 }
 
+# Check for required dependencies
+check_dependencies() {
+    command -v jq >/dev/null 2>&1 || { echo >&2 "jq is required but it's not installed. Aborting."; exit 1; }
+    command -v go >/dev/null 2>&1 || { echo >&2 "Go is required but it's not installed. Aborting."; exit 1; }
+}
+
 # Compile data function
 compile_dat() {
     TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/compile_dat.XXXXXX")
@@ -27,11 +33,14 @@ compile_dat() {
 
     # Clone or update the geosite repository
     if [[ -d ${GEOSITE} ]]; then
+        echo "Updating geosite repository..."
         (cd "${GEOSITE}" && git pull)
     else
+        echo "Cloning geosite repository..."
         git clone https://github.com/Loyalsoldier/v2ray-rules-dat.git "${GEOSITE}"
     fi
     
+    echo "Running geosite generation..."
     (cd "${GEOSITE}" && go run main.go)
 
     # Update geosite.dat if dlc.dat exists
@@ -44,16 +53,19 @@ compile_dat() {
 
     # Install geoip if not already installed
     if [[ ! -x "$GOPATH/bin/geoip" ]]; then
+        echo "Installing geoip..."
         go install github.com/v2ray/geoip@latest
     fi
 
     cd "$TMPDIR"
 
     # Download and process GeoLite2 data
+    echo "Downloading GeoLite2 data..."
     curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
     unzip -q GeoLite2-Country-CSV.zip
     mkdir geoip && mv *.csv geoip/
 
+    echo "Generating geoip.dat..."
     "$GOPATH/bin/geoip" \
         --country=./geoip/GeoLite2-Country-Locations-en.csv \
         --ipv4=./geoip/GeoLite2-Country-Blocks-IPv4.csv \
@@ -72,10 +84,12 @@ compile_dat() {
 
 # Download data function
 download_dat() {
+    echo "Downloading geoip.dat..."
     wget -qO - https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest \
         | jq -r .assets[].browser_download_url | grep geoip.dat \
         | xargs wget -O "$DATADIR/geoip.dat"
 
+    echo "Downloading geosite.dat..."
     wget -qO - https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest \
         | grep browser_download_url | cut -d '"' -f 4 \
         | xargs wget -O "$DATADIR/geosite.dat"
@@ -83,6 +97,8 @@ download_dat() {
 
 # Main execution logic
 ACTION="${1:-download}"
+
+check_dependencies
 
 case $ACTION in
     "download") download_dat ;;
