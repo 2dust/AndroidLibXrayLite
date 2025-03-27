@@ -54,7 +54,7 @@ compile_dat() {
     # Install geoip if not already installed
     if [[ ! -x "$GOPATH/bin/geoip" ]]; then
         echo "Installing geoip..."
-        go install github.com/v2ray/geoip@latest
+        go install github.com/Loyalsoldier/geoip@latest
     fi
 
     cd "$TMPDIR"
