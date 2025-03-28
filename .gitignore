@@ -1,10 +1,21 @@
+# Ignore editor configurations
 .vscode
+
+# Ignore build files and directories
 gradle/build.gradle
+build/
+logs/
+
+# Ignore protobuf generated files
 *.pb.go
 binary*.go
+
+# Ignore demo files and directories
 conf/demo/
 demo/
 assets/
+
+# Ignore specific library files
 libv2ray*.[a|j]ar
 
 # Ignore binary files
@@ -18,6 +29,21 @@ libv2ray*.[a|j]ar
 *.swp
 *.swo
 
-# Ignore build and log directories
-build/
-logs/
+# Ignore macOS specific files
+.DS_Store
+
+# Ignore node_modules directory
+node_modules/
+
+# Ignore environment variable files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Ignore log files
+*.log
+
+# Ignore coverage directory used by testing tools
+coverage/
