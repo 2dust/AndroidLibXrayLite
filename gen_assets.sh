@@ -43,9 +43,9 @@ compile_dat() {
     echo "Running geosite generation..."
     (cd "${GEOSITE}" && go run main.go)
 
-    # Update geosite.dat if dlc.dat exists
-    if [[ -e "${GEOSITE}/dlc.dat" ]]; then
-        mv -f "${GEOSITE}/dlc.dat" "$DATADIR/geosite.dat"
+    # Update geosite.dat if it exists
+    if [[ -e "${GEOSITE}/geosite.dat" ]]; then
+        mv -f "${GEOSITE}/geosite.dat" "$DATADIR/geosite.dat"
         echo "----------> geosite.dat updated."
     else
         echo "----------> geosite.dat failed to update."
@@ -61,8 +61,8 @@ compile_dat() {
 
     # Download and process GeoLite2 data
     echo "Downloading GeoLite2 data..."
-    curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip
-    unzip -q GeoLite2-Country-CSV.zip
+    curl -L -O http://geolite.maxmind.com/download/geoip/database/GeoLite2-Country-CSV.zip || error_exit
+    unzip -q GeoLite2-Country-CSV.zip || error_exit
     mkdir geoip && mv *.csv geoip/
 
     echo "Generating geoip.dat..."
@@ -79,6 +79,7 @@ compile_dat() {
         echo "----------> geoip.dat failed to update."
     fi
 
+    rm -rf "$TMPDIR"
     trap - ERR  # Disable error trap
 }
 
