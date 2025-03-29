@@ -44,8 +44,8 @@ compile_dat() {
     (cd "${GEOSITE}" && go run main.go)
 
     # Update geosite.dat if dlc.dat exists
-    if [[ -e "${GEOSITE}/dlc.dat" ]]; then
-        mv -f "${GEOSITE}/dlc.dat" "$DATADIR/geosite.dat"
+    if [[ -e "${GEOSITE}/geosite.dat" ]]; then
+        mv -f "${GEOSITE}/geosite.dat" "$DATADIR/geosite.dat"
         echo "----------> geosite.dat updated."
     else
         echo "----------> geosite.dat failed to update."
