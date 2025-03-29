@@ -86,14 +86,10 @@ compile_dat() {
 # Download data function
 download_dat() {
     echo "Downloading geoip.dat..."
-    wget -qO - https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest \
-        | jq -r .assets[].browser_download_url | grep geoip.dat \
-        | xargs wget -O "$DATADIR/geoip.dat"
+    curl -sL https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat -o "$DATADIR/geoip.dat"
 
     echo "Downloading geosite.dat..."
-    wget -qO - https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases/latest \
-        | grep browser_download_url | cut -d '"' -f 4 \
-        | xargs wget -O "$DATADIR/geosite.dat"
+    curl -sL https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat -o "$DATADIR/geosite.dat"
 }
 
 # Main execution logic
