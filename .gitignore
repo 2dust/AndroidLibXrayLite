@@ -1,49 +1,61 @@
-# Ignore editor configurations
-.vscode
+# Ignore .vscode directory for Visual Studio Code
+.vscode/
 
-# Ignore build files and directories
+# Ignore Gradle build file
 gradle/build.gradle
-build/
-logs/
 
-# Ignore protobuf generated files
+# Ignore Protocol Buffer generated files
 *.pb.go
+
+# Ignore binary files
 binary*.go
 
-# Ignore demo files and directories
+# Ignore demo configuration and assets
 conf/demo/
 demo/
 assets/
 
-# Ignore specific library files
+# Ignore libv2ray binaries and JAR files
 libv2ray*.[a|j]ar
 
-# Ignore binary files
+# Ignore OS-specific and backup files
 *.exe
 *.dll
 *.so
 *.dylib
-
-# Ignore backup and temporary files
 *~
 *.swp
 *.swo
 
-# Ignore macOS specific files
-.DS_Store
+# Ignore build and log directories
+build/
+logs/
 
-# Ignore node_modules directory
-node_modules/
+# Ignore Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.a
+*.out
 
-# Ignore environment variable files
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# Ignore Go vendor directory
+vendor/
 
-# Ignore log files
-*.log
+# Ignore Go test binaries
+*.test
 
-# Ignore coverage directory used by testing tools
-coverage/
+# Ignore coverage files
+coverage.out
+
+# Ignore Go module files
+go.sum
+go.mod
+
+# Ignore IDE and editor specific files
+.idea/
+*.iml
+
+# Ignore shell history files
+.history
