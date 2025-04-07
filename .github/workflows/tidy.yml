@@ -56,8 +56,8 @@ jobs:
       - name: Update and commit changes
         if: env.needs_update == 'true'
         run: |
-          go get github.com/xtls/xray-core@${{ env.LATEST_TAG_SHA }}
           go get -u
+          go get github.com/xtls/xray-core@${{ env.LATEST_TAG_SHA }}
           go get gvisor.dev/gvisor@go
           go get github.com/OmarTariq612/goech@v0.0.0-20240405204721-8e2e1dafd3a0
           go mod tidy -v
