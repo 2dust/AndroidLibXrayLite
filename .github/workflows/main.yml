@@ -37,22 +37,12 @@ jobs:
         cmdline-tools-version: '12266719'
         packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
 
-    - name: NDK Cache
-      id: ndk-cache
-      uses: actions/cache@v3
-      with:
-        path: ${{ env.ANDROID_HOME }}/ndk/29.0.13113456
-        key: ndk-29.0.13113456
-        
     - name: Install NDK
-      if: steps.ndk-cache.outputs.cache-hit != 'true'
       run: |
         echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
           --channel=3 \
           --install "ndk;29.0.13113456"
-    
-    - name: Set NDK_HOME
-      run: echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
+        echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
 
     - name: Build
       run: |
