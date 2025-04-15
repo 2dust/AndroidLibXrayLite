@@ -37,12 +37,16 @@ jobs:
         cmdline-tools-version: '12266719'
         packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
 
-    - name: Install NDK
+    - name: Set up Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r29
+        local-cache: true
+        
+    - name: Set NDK_HOME
       run: |
-        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-          --channel=3 \
-          --install "ndk;29.0.13113456"
-        echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
+        echo "NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+        echo "NDK path: $ANDROID_NDK_HOME"
 
     - name: Build
       run: |
