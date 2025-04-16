@@ -8,10 +8,10 @@ on:
         type: string
   pull_request:
     branches:
-      - main
+      - dev-lite
   push:
     branches:
-      - main
+      - dev-lite
 jobs:
   build:
     runs-on: ubuntu-latest
