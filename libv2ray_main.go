@@ -41,8 +41,6 @@ type V2RayPoint struct {
 
 	Vpoint    *v2core.Instance
 	IsRunning bool
-
-	ConfigureFileContent string
 }
 
 // V2RayVPNServiceSupportsSet is an interface to support Android VPN mode
@@ -96,7 +94,7 @@ func NewV2RayPoint(s V2RayVPNServiceSupportsSet) *V2RayPoint {
 }
 
 // RunLoop runs the V2Ray main loop
-func (v *V2RayPoint) RunLoop(prefIPv6 bool) (err error) {
+func (v *V2RayPoint) RunLoop(configContent string) (err error) {
 	v.v2rayOP.Lock()
 	defer v.v2rayOP.Unlock()
 
@@ -104,7 +102,7 @@ func (v *V2RayPoint) RunLoop(prefIPv6 bool) (err error) {
 		return nil
 	}
 
-	err = v.pointloop()
+	err = v.pointloop(configContent)
 	return
 }
 
@@ -183,9 +181,9 @@ func (v *V2RayPoint) shutdownInit() {
 }
 
 // pointloop sets up and starts the V2Ray core
-func (v *V2RayPoint) pointloop() error {
+func (v *V2RayPoint) pointloop(configContent string) error {
 	log.Println("Loading core config")
-	config, err := v2serial.LoadJSONConfig(strings.NewReader(v.ConfigureFileContent))
+	config, err := v2serial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
 		return fmt.Errorf("failed to load core config: %w", err)
 	}
