@@ -38,16 +38,12 @@ type V2RayPoint struct {
 	SupportSet   V2RayVPNServiceSupportsSet
 	statsManager v2stats.Manager
 
-	// dialer    *ProtectedDialer
 	v2rayOP sync.Mutex
-	// closeChan chan struct{}
 
 	Vpoint    *v2core.Instance
 	IsRunning bool
 
-	// DomainName           string
 	ConfigureFileContent string
-	// AsyncResolve         bool
 }
 
 // V2RayVPNServiceSupportsSet is an interface to support Android VPN mode
@@ -68,38 +64,9 @@ func (v *V2RayPoint) RunLoop(prefIPv6 bool) (err error) {
 		return nil
 	}
 
-	// v.closeChan = make(chan struct{})
-	// v.dialer.PrepareResolveChan()
-
-	// go v.handleResolve()
-
-	// prepareDomain := func() {
-	// 	v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
-	// 	close(v.dialer.ResolveChan())
-	// }
-
-	// if v.AsyncResolve {
-	// 	go prepareDomain()
-	// } else {
-	// 	prepareDomain()
-	// }
-
 	err = v.pointloop()
 	return
 }
-
-// // handleResolve handles the resolution process for domains
-// func (v *V2RayPoint) handleResolve() {
-// 	select {
-// 	case <-v.dialer.ResolveChan():
-// 		if !v.dialer.IsVServerReady() {
-// 			log.Println("vServer cannot resolve, shutting down")
-// 			v.StopLoop()
-// 			v.SupportSet.Shutdown()
-// 		}
-// 	case <-v.closeChan:
-// 	}
-// }
 
 // StopLoop stops the V2Ray main loop
 func (v *V2RayPoint) StopLoop() error {
@@ -107,7 +74,6 @@ func (v *V2RayPoint) StopLoop() error {
 	defer v.v2rayOP.Unlock()
 
 	if v.IsRunning {
-		// close(v.closeChan)
 		v.shutdownInit()
 		v.SupportSet.OnEmitStatus(0, "Closed")
 	}
@@ -169,14 +135,6 @@ func (v *V2RayPoint) MeasureDelay(url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	// go func() {
-	// 	select {
-	// 	case <-v.closeChan:
-	// 		cancel()
-	// 	case <-ctx.Done():
-	// 	}
-	// }()
-
 	return measureInstDelay(ctx, v.Vpoint, url)
 }
 
@@ -237,8 +195,6 @@ func NewV2RayPoint(s V2RayVPNServiceSupportsSet) *V2RayPoint {
 	v2internet.UseAlternativeSystemDialer(dialer)
 	return &V2RayPoint{
 		SupportSet: s,
-		// dialer:       dialer,
-		// AsyncResolve: adns,
 	}
 }
 
