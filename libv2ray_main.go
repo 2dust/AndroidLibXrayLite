@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	mobasset "golang.org/x/mobile/asset"
-
+	v2applog "github.com/xtls/xray-core/app/log"
+	v2commlog "github.com/xtls/xray-core/common/log"
 	v2net "github.com/xtls/xray-core/common/net"
 	v2filesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
@@ -24,9 +24,7 @@ import (
 	v2serial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	v2internet "github.com/xtls/xray-core/transport/internet"
-
-	v2applog "github.com/xtls/xray-core/app/log"
-	v2commlog "github.com/xtls/xray-core/common/log"
+	mobasset "golang.org/x/mobile/asset"
 )
 
 const (
@@ -40,16 +38,16 @@ type V2RayPoint struct {
 	SupportSet   V2RayVPNServiceSupportsSet
 	statsManager v2stats.Manager
 
-	dialer    *ProtectedDialer
-	v2rayOP   sync.Mutex
-	closeChan chan struct{}
+	// dialer    *ProtectedDialer
+	v2rayOP sync.Mutex
+	// closeChan chan struct{}
 
 	Vpoint    *v2core.Instance
 	IsRunning bool
 
-	DomainName           string
+	// DomainName           string
 	ConfigureFileContent string
-	AsyncResolve         bool
+	// AsyncResolve         bool
 }
 
 // V2RayVPNServiceSupportsSet is an interface to support Android VPN mode
@@ -70,38 +68,38 @@ func (v *V2RayPoint) RunLoop(prefIPv6 bool) (err error) {
 		return nil
 	}
 
-	v.closeChan = make(chan struct{})
-	v.dialer.PrepareResolveChan()
+	// v.closeChan = make(chan struct{})
+	// v.dialer.PrepareResolveChan()
 
-	go v.handleResolve()
+	// go v.handleResolve()
 
-	prepareDomain := func() {
-		v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
-		close(v.dialer.ResolveChan())
-	}
+	// prepareDomain := func() {
+	// 	v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
+	// 	close(v.dialer.ResolveChan())
+	// }
 
-	if v.AsyncResolve {
-		go prepareDomain()
-	} else {
-		prepareDomain()
-	}
+	// if v.AsyncResolve {
+	// 	go prepareDomain()
+	// } else {
+	// 	prepareDomain()
+	// }
 
 	err = v.pointloop()
 	return
 }
 
-// handleResolve handles the resolution process for domains
-func (v *V2RayPoint) handleResolve() {
-	select {
-	case <-v.dialer.ResolveChan():
-		if !v.dialer.IsVServerReady() {
-			log.Println("vServer cannot resolve, shutting down")
-			v.StopLoop()
-			v.SupportSet.Shutdown()
-		}
-	case <-v.closeChan:
-	}
-}
+// // handleResolve handles the resolution process for domains
+// func (v *V2RayPoint) handleResolve() {
+// 	select {
+// 	case <-v.dialer.ResolveChan():
+// 		if !v.dialer.IsVServerReady() {
+// 			log.Println("vServer cannot resolve, shutting down")
+// 			v.StopLoop()
+// 			v.SupportSet.Shutdown()
+// 		}
+// 	case <-v.closeChan:
+// 	}
+// }
 
 // StopLoop stops the V2Ray main loop
 func (v *V2RayPoint) StopLoop() error {
@@ -109,7 +107,7 @@ func (v *V2RayPoint) StopLoop() error {
 	defer v.v2rayOP.Unlock()
 
 	if v.IsRunning {
-		close(v.closeChan)
+		// close(v.closeChan)
 		v.shutdownInit()
 		v.SupportSet.OnEmitStatus(0, "Closed")
 	}
@@ -171,13 +169,13 @@ func (v *V2RayPoint) MeasureDelay(url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	go func() {
-		select {
-		case <-v.closeChan:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	// go func() {
+	// 	select {
+	// 	case <-v.closeChan:
+	// 		cancel()
+	// 	case <-ctx.Done():
+	// 	}
+	// }()
 
 	return measureInstDelay(ctx, v.Vpoint, url)
 }
@@ -228,7 +226,7 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 }
 
 // NewV2RayPoint creates a new V2RayPoint instance
-func NewV2RayPoint(s V2RayVPNServiceSupportsSet, adns bool) *V2RayPoint {
+func NewV2RayPoint(s V2RayVPNServiceSupportsSet) *V2RayPoint {
 	v2applog.RegisterHandlerCreator(v2applog.LogType_Console,
 		func(lt v2applog.LogType,
 			options v2applog.HandlerCreatorOptions) (v2commlog.Handler, error) {
@@ -238,15 +236,15 @@ func NewV2RayPoint(s V2RayVPNServiceSupportsSet, adns bool) *V2RayPoint {
 	dialer := NewProtectedDialer(s)
 	v2internet.UseAlternativeSystemDialer(dialer)
 	return &V2RayPoint{
-		SupportSet:   s,
-		dialer:       dialer,
-		AsyncResolve: adns,
+		SupportSet: s,
+		// dialer:       dialer,
+		// AsyncResolve: adns,
 	}
 }
 
 // CheckVersionX returns the library and V2Ray versions
 func CheckVersionX() string {
-	var version = 30
+	var version = 32
 	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, v2core.Version())
 }
 
