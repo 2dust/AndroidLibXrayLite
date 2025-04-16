@@ -52,11 +52,10 @@ jobs:
          gomobile init
          go mod tidy
          gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
-
-    - name: Upload AndroidLibXrayLite to release
-      if: github.event.inputs.release_tag != ''
-      uses: svenstaro/upload-release-action@v2
+ 
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4.6.2
       with:
-        file: ./libv2ray*r
-        tag: ${{ github.event.inputs.release_tag }}
-        file_glob: true
+        name: libv2ray
+        path: |
+          ${{ github.workspace }}/libv2ray*r
