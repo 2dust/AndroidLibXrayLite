@@ -99,6 +99,7 @@ func (x *CoreController) StartLoop(configContent string) (err error) {
 	defer x.coreMutex.Unlock()
 
 	if x.IsRunning {
+		log.Println("The instance is already running")
 		return nil
 	}
 
@@ -114,6 +115,7 @@ func (x *CoreController) StopLoop() error {
 
 	if x.IsRunning {
 		x.doShutdown()
+		log.Println("Shut down the running instance")
 		x.CallbackHandler.OnEmitStatus(0, "Closed")
 	}
 	return nil
@@ -122,7 +124,7 @@ func (x *CoreController) StopLoop() error {
 // QueryStats retrieves and resets traffic statistics for a specific outbound tag and direction
 // Returns the accumulated traffic value and resets the counter to zero
 // Returns 0 if the stats manager is not initialized or the counter doesn't exist
-func (x CoreController) QueryStats(tag string, direct string) int64 {
+func (x *CoreController) QueryStats(tag string, direct string) int64 {
 	if x.statsManager == nil {
 		return 0
 	}
@@ -171,7 +173,7 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 // CheckVersionX returns the library and Xray versions
 func CheckVersionX() string {
-	var version = 32
+	var version = 31
 	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, core.Version())
 }
 
