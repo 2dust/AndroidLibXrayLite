@@ -1,4 +1,5 @@
 # Ignore editor directories and files
+.idea/
 .vscode/
 
 # Ignore Gradle files
