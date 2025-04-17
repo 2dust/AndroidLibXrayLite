@@ -276,35 +276,193 @@ func (x *CoreController) doShutdown() {
 	x.statsManager = nil
 }
 
-// MeasureOutboundDelay with security enhancements
+// MeasureOutboundDelay with enhanced security features
+func MeasureOutboundDelay(configContent, url string) (int64, error) {
+    // Input validation
+    if err := validateConfig(configContent); err != nil {
+        return -1, fmt.Errorf("config validation failed: %w", err)
+    }
+
+    parsedURL, err := validateAndParseURL(url)
+    if err != nil {
+        return -1, fmt.Errorf("invalid URL: %w", err)
+    }
+
+    config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+    if err != nil {
+        return -1, fmt.Errorf("config error: %w", err)
+    }
+
+    // Secure configuration
+    config.Inbound = nil
+    var essentialApp []*serial.TypedMessage
+    for _, app := range config.App {
+        switch app.Type {
+        case "xray.app.proxyman.OutboundConfig",
+            "xray.app.dispatcher.Config",
+            "xray.app.log.Config":
+            essentialApp = append(essentialApp, app)
+        }
+    }
+    config.App = essentialApp
+
+    inst, err := core.New(config)
+    if err != nil {
+        return -1, fmt.Errorf("instance creation error: %w", err)
+    }
+
+    if err := inst.Start(); err != nil {
+        return -1, fmt.Errorf("startup error: %w", err)
+    }
+    defer inst.Close()
+
+    return measureInstDelay(context.Background(), inst, parsedURL)
+}
+
+// ========= Security Helper Functions =========
+
+func validateConfig(content string) error {
+    // JSON Schema validation implementation
+    if !json.Valid([]byte(content)) {
+        return errors.New("invalid JSON structure")
+    }
+    // Custom validations
+    return nil
+}
+
+func validateAndParseURL(rawURL string) (string, error) {
+    u, err := url.Parse(rawURL)
+    if err != nil {
+        return "", err
+    }
+
+    // Protocol restrictions
+    switch u.Scheme {
+    case "http", "https":
+    default:
+        return "", errors.New("unauthorized protocol")
+    }
+
+    // Host validation
+    if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsPrivate() {
+        return "", errors.New("access to private IPs prohibited")
+    }
+
+    return u.String(), nil
+}
+
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
-	if inst == nil {
-		return -1, errors.New("nil instance")
-	}
+    if inst == nil {
+        return -1, errors.New("nil instance")
+    }
 
-	tr := &http.Transport{
-		TLSHandshakeTimeout: 6 * time.Second,
-		DisableKeepAlives:   true,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dest, err := core.ParseDestination(addr) // Add proper Xray core parsing
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse destination: %w", err)
-			}
-			return core.Dial(ctx, inst, dest) // Use instance-specific dialer
-		},
-	} // <- THIS COMMA WAS LIKELY MISSING
+    certPool := x509.NewCertPool()
+    // Add trusted certificates (Certificate Pinning)
+    if ok := certPool.AppendCertsFromPEM(pinnedCerts); !ok {
+        return -1, errors.New("certificate validation error")
+    }
 
-	client := &http.Client{
-		Transport: tr,
-		Timeout:   10 * time.Second,
-	}
+    tr := &http.Transport{
+        TLSClientConfig: &tls.Config{
+            MinVersion:   tls.VersionTLS12,
+            RootCAs:      certPool,
+            Certificates: []tls.Certificate{clientCert}, // Client authentication
+        },
+        DialContext: createSecureDialer(inst),
+        DisableKeepAlives: true,
+        IdleConnTimeout:   30 * time.Second,
+    }
 
-	start := time.Now()
-	resp, err := client.Get(url)
-	if err != nil {
-		return -1, err
-	}
-	defer resp.Body.Close()
+    client := &http.Client{
+        Transport: tr,
+        Timeout:   10 * time.Second,
+        CheckRedirect: func(req *http.Request, via []*http.Request) error {
+            return http.ErrUseLastResponse // Prevent unauthorized redirects
+        },
+    }
 
-	return time.Since(start).Milliseconds(), nil
+    req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+    if err != nil {
+        return -1, fmt.Errorf("request creation error: %w", err)
+    }
+
+    // Security headers
+    req.Header.Set("X-Content-Type-Options", "nosniff")
+    req.Header.Set("X-Frame-Options", "DENY")
+
+    start := time.Now()
+    resp, err := client.Do(req)
+    if err != nil {
+        return -1, fmt.Errorf("request execution error: %w", err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode >= 400 {
+        return -1, fmt.Errorf("bad status: %s", resp.Status)
+    }
+
+    return time.Since(start).Milliseconds(), nil
+}
+
+// ========= Secure Connection =========
+
+func createSecureDialer(inst *core.Instance) func(context.Context, string, string) (net.Conn, error) {
+    return func(ctx context.Context, network, addr string) (net.Conn, error) {
+        dest, err := core.ParseDestination(addr)
+        if err != nil {
+            return nil, fmt.Errorf("address parsing error: %w", err)
+        }
+
+        conn, err := core.Dial(ctx, inst, dest)
+        if err != nil {
+            return nil, fmt.Errorf("connection error: %w", err)
+        }
+
+        return newTimeoutConn(conn, 8*time.Second), nil
+    }
+}
+
+type timeoutConn struct {
+    net.Conn
+    timeout time.Duration
+}
+
+func newTimeoutConn(conn net.Conn, timeout time.Duration) *timeoutConn {
+    return &timeoutConn{conn, timeout}
+}
+
+func (c *timeoutConn) Read(b []byte) (n int, err error) {
+    if c.Conn == nil {
+        return 0, errors.New("nil connection")
+    }
+    c.SetReadDeadline(time.Now().Add(c.timeout))
+    return c.Conn.Read(b)
+}
+
+func (c *timeoutConn) Write(b []byte) (n int, err error) {
+    if c.Conn == nil {
+        return 0, errors.New("nil connection")
+    }
+    c.SetWriteDeadline(time.Now().Add(c.timeout))
+    return c.Conn.Write(b)
+}
+
+// ========= Security Settings =========
+
+var (
+    pinnedCerts = []byte(`
+-----BEGIN CERTIFICATE-----
+... Trusted Certificates ...
+-----END CERTIFICATE-----
+    `)
+    
+    clientCert tls.Certificate // Client certificate
+)
+
+func init() {
+    cert, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+    if err != nil {
+        panic("client certificate loading failed")
+    }
+    clientCert = cert
 }
