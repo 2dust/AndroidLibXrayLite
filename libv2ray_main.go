@@ -202,6 +202,13 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	return measureInstDelay(context.Background(), inst, url)
 }
 
+// CheckVersionX returns the library and Xray versions
+func CheckVersionX() string {
+	var version = 31
+	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, core.Version())
+
+}	
+
 // doShutdown shuts down the Xray instance and cleans up resources
 func (x *CoreController) doShutdown() {
 	if x.CoreInstance != nil {
