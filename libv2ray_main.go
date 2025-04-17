@@ -33,7 +33,7 @@ const (
 	xudpBaseKey = "xray.xudp.basekey"    // XUDP encryption key
 )
 
-// CoreController manages Xray core instance
+// CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
 	CallbackHandler CoreCallbackHandler // System callback handler
 	statsManager    corestats.Manager   // Traffic statistics
@@ -42,7 +42,7 @@ type CoreController struct {
 	IsRunning       bool                // Service status flag
 }
 
-// CoreCallbackHandler defines system callbacks
+// CoreCallbackHandler defines interface for receiving callbacks and notifications from the core service
 type CoreCallbackHandler interface {
 	Startup() int              // Triggered on core start
 	Shutdown() int             // Triggered on core shutdown
@@ -50,12 +50,15 @@ type CoreCallbackHandler interface {
 	OnEmitStatus(int, string) int // Status reporting
 }
 
-// consoleLogWriter implements custom log writer
+// consoleLogWriter implements a log writer without datetime stamps
+// as Android system already adds timestamps to each log line
 type consoleLogWriter struct {
 	logger *log.Logger // Standard logger
 }
 
-// InitCoreEnv initializes core environment
+// InitCoreEnv initializes environment variables and file system handlers for the core
+// It sets up asset path, certificate path, XUDP base key and customizes the file reader
+// to support Android asset system
 func InitCoreEnv(envPath string, key string) {
 	// Set asset/cert paths
 	if len(envPath) > 0 {
@@ -98,7 +101,8 @@ func InitCoreEnv(envPath string, key string) {
 	}
 }
 
-// NewCoreController creates controller instance
+// NewCoreController initializes and returns a new CoreController instance
+// Sets up the console log handler and associates it with the provided callback handler
 func NewCoreController(s CoreCallbackHandler) *CoreController {
 	// Register custom logger
 	if err := coreapplog.RegisterHandlerCreator(
@@ -115,7 +119,9 @@ func NewCoreController(s CoreCallbackHandler) *CoreController {
 	}
 }
 
-// StartLoop launches Xray core
+// StartLoop initializes and starts the core processing loop
+// Thread-safe method that configures and runs the Xray core with the provided configuration
+// Returns immediately if the core is already running
 func (x *CoreController) StartLoop(configContent string) (err error) {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
@@ -128,7 +134,8 @@ func (x *CoreController) StartLoop(configContent string) (err error) {
 	return x.doStartLoop(configContent)
 }
 
-// StopLoop terminates Xray core
+// StopLoop safely stops the core processing loop and releases resources
+// Thread-safe method that shuts down the core instance and triggers necessary callbacks
 func (x *CoreController) StopLoop() error {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
@@ -140,7 +147,9 @@ func (x *CoreController) StopLoop() error {
 	return nil
 }
 
-// QueryStats retrieves traffic statistics
+// QueryStats retrieves and resets traffic statistics for a specific outbound tag and direction
+// Returns the accumulated traffic value and resets the counter to zero
+// Returns 0 if the stats manager is not initialized or the counter doesn't exist
 func (x *CoreController) QueryStats(tag string, direct string) int64 {
 	if x.statsManager == nil {
 		return 0
@@ -152,14 +161,16 @@ func (x *CoreController) QueryStats(tag string, direct string) int64 {
 	return counter.Set(0)
 }
 
-// MeasureDelay tests network latency
+// MeasureDelay measures network latency to a specified URL through the current core instance
+// Uses a 12-second timeout context and returns the round-trip time in milliseconds
+// An error is returned if the connection fails or returns an unexpected status
 func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	return measureInstDelay(ctx, x.CoreInstance, url)
 }
 
-// MeasureOutboundDelay tests outbound connection
+// MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
 	if err != nil {
@@ -191,7 +202,7 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	return measureInstDelay(context.Background(), inst, url)
 }
 
-// Internal shutdown handler
+// doShutdown shuts down the Xray instance and cleans up resources
 func (x *CoreController) doShutdown() {
 	if x.CoreInstance != nil {
 		if err := x.CoreInstance.Close(); err != nil {
@@ -203,7 +214,7 @@ func (x *CoreController) doShutdown() {
 	x.statsManager = nil
 }
 
-// Core startup logic
+// doStartLoop sets up and starts the Xray core
 func (x *CoreController) doStartLoop(configContent string) error {
 	log.Println("initializing core...")
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
@@ -280,7 +291,7 @@ func (w *consoleLogWriter) Close() error {
 	return nil
 }
 
-// Create stdout logger
+// createStdoutLogWriter creates a logger that won't print date/time stamps
 func createStdoutLogWriter() corecommlog.WriterCreator {
 	return func() corecommlog.Writer {
 		return &consoleLogWriter{
