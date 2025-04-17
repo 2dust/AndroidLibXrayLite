@@ -206,7 +206,6 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 func CheckVersionX() string {
 	var version = 31
 	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, core.Version())
-
 }	
 
 // doShutdown shuts down the Xray instance and cleans up resources
