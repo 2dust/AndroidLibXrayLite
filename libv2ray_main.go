@@ -14,185 +14,61 @@ import (
 	"sync"
 	"time"
 
-	mobasset "golang.org/x/mobile/asset"
-
-	v2net "github.com/xtls/xray-core/common/net"
-	v2filesystem "github.com/xtls/xray-core/common/platform/filesystem"
+	coreapplog "github.com/xtls/xray-core/app/log"
+	corecommlog "github.com/xtls/xray-core/common/log"
+	corenet "github.com/xtls/xray-core/common/net"
+	corefilesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
-	v2core "github.com/xtls/xray-core/core"
-	v2stats "github.com/xtls/xray-core/features/stats"
-	v2serial "github.com/xtls/xray-core/infra/conf/serial"
+	core "github.com/xtls/xray-core/core"
+	corestats "github.com/xtls/xray-core/features/stats"
+	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
-	v2internet "github.com/xtls/xray-core/transport/internet"
-
-	v2applog "github.com/xtls/xray-core/app/log"
-	v2commlog "github.com/xtls/xray-core/common/log"
+	mobasset "golang.org/x/mobile/asset"
 )
 
 const (
-	v2Asset     = "xray.location.asset"
-	v2Cert      = "xray.location.cert"
+	coreAsset   = "xray.location.asset"
+	coreCert    = "xray.location.cert"
 	xudpBaseKey = "xray.xudp.basekey"
 )
 
-// V2RayPoint represents a V2Ray Point Server
-type V2RayPoint struct {
-	SupportSet   V2RayVPNServiceSupportsSet
-	statsManager v2stats.Manager
-
-	dialer    *ProtectedDialer
-	v2rayOP   sync.Mutex
-	closeChan chan struct{}
-
-	Vpoint    *v2core.Instance
-	IsRunning bool
-
-	DomainName           string
-	ConfigureFileContent string
-	AsyncResolve         bool
+// CoreController represents a controller for managing Xray core instance lifecycle
+type CoreController struct {
+	CallbackHandler CoreCallbackHandler
+	statsManager    corestats.Manager
+	coreMutex       sync.Mutex
+	CoreInstance    *core.Instance
+	IsRunning       bool
 }
 
-// V2RayVPNServiceSupportsSet is an interface to support Android VPN mode
-type V2RayVPNServiceSupportsSet interface {
-	Setup(Conf string) int
-	Prepare() int
+// CoreCallbackHandler defines interface for receiving callbacks and notifications from the core service
+type CoreCallbackHandler interface {
+	Startup() int
 	Shutdown() int
 	Protect(int) bool
 	OnEmitStatus(int, string) int
 }
 
-// RunLoop runs the V2Ray main loop
-func (v *V2RayPoint) RunLoop(prefIPv6 bool) (err error) {
-	v.v2rayOP.Lock()
-	defer v.v2rayOP.Unlock()
-
-	if v.IsRunning {
-		return nil
-	}
-
-	v.closeChan = make(chan struct{})
-	v.dialer.PrepareResolveChan()
-
-	go v.handleResolve()
-
-	prepareDomain := func() {
-		v.dialer.PrepareDomain(v.DomainName, v.closeChan, prefIPv6)
-		close(v.dialer.ResolveChan())
-	}
-
-	if v.AsyncResolve {
-		go prepareDomain()
-	} else {
-		prepareDomain()
-	}
-
-	err = v.pointloop()
-	return
+// consoleLogWriter implements a log writer without datetime stamps
+// as Android system already adds timestamps to each log line
+type consoleLogWriter struct {
+	logger *log.Logger
 }
 
-// handleResolve handles the resolution process for domains
-func (v *V2RayPoint) handleResolve() {
-	select {
-	case <-v.dialer.ResolveChan():
-		if !v.dialer.IsVServerReady() {
-			log.Println("vServer cannot resolve, shutting down")
-			v.StopLoop()
-			v.SupportSet.Shutdown()
-		}
-	case <-v.closeChan:
-	}
-}
-
-// StopLoop stops the V2Ray main loop
-func (v *V2RayPoint) StopLoop() error {
-	v.v2rayOP.Lock()
-	defer v.v2rayOP.Unlock()
-
-	if v.IsRunning {
-		close(v.closeChan)
-		v.shutdownInit()
-		v.SupportSet.OnEmitStatus(0, "Closed")
-	}
-	return nil
-}
-
-// QueryStats returns the traffic stats for a given tag and direction
-func (v V2RayPoint) QueryStats(tag string, direct string) int64 {
-	if v.statsManager == nil {
-		return 0
-	}
-	counter := v.statsManager.GetCounter(fmt.Sprintf("outbound>>>%s>>>traffic>>>%s", tag, direct))
-	if counter == nil {
-		return 0
-	}
-	return counter.Set(0)
-}
-
-// shutdownInit shuts down the V2Ray instance and cleans up resources
-func (v *V2RayPoint) shutdownInit() {
-	if v.Vpoint != nil {
-		v.Vpoint.Close()
-		v.Vpoint = nil
-	}
-	v.IsRunning = false
-	v.statsManager = nil
-}
-
-// pointloop sets up and starts the V2Ray core
-func (v *V2RayPoint) pointloop() error {
-	log.Println("Loading core config")
-	config, err := v2serial.LoadJSONConfig(strings.NewReader(v.ConfigureFileContent))
-	if err != nil {
-		return fmt.Errorf("failed to load core config: %w", err)
-	}
-
-	log.Println("Creating new core instance")
-	v.Vpoint, err = v2core.New(config)
-	if err != nil {
-		return fmt.Errorf("failed to create core instance: %w", err)
-	}
-	v.statsManager = v.Vpoint.GetFeature(v2stats.ManagerType()).(v2stats.Manager)
-
-	log.Println("Starting core")
-	v.IsRunning = true
-	if err := v.Vpoint.Start(); err != nil {
-		v.IsRunning = false
-		return fmt.Errorf("failed to start core: %w", err)
-	}
-
-	v.SupportSet.Prepare()
-	v.SupportSet.Setup("")
-	v.SupportSet.OnEmitStatus(0, "Running")
-	return nil
-}
-
-// MeasureDelay measures the delay to a given URL
-func (v *V2RayPoint) MeasureDelay(url string) (int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
-
-	go func() {
-		select {
-		case <-v.closeChan:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-
-	return measureInstDelay(ctx, v.Vpoint, url)
-}
-
-// InitV2Env sets the V2Ray asset path
-func InitV2Env(envPath string, key string) {
+// InitCoreEnv initializes environment variables and file system handlers for the core
+// It sets up asset path, certificate path, XUDP base key and customizes the file reader
+// to support Android asset system
+func InitCoreEnv(envPath string, key string) {
 	if len(envPath) > 0 {
-		os.Setenv(v2Asset, envPath)
-		os.Setenv(v2Cert, envPath)
+		os.Setenv(coreAsset, envPath)
+		os.Setenv(coreCert, envPath)
 	}
 	if len(key) > 0 {
 		os.Setenv(xudpBaseKey, key)
+
 	}
 
-	v2filesystem.NewFileReader = func(path string) (io.ReadCloser, error) {
+	corefilesystem.NewFileReader = func(path string) (io.ReadCloser, error) {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			_, file := filepath.Split(path)
 			return mobasset.Open(file)
@@ -201,9 +77,77 @@ func InitV2Env(envPath string, key string) {
 	}
 }
 
+// NewCoreController initializes and returns a new CoreController instance
+// Sets up the console log handler and associates it with the provided callback handler
+func NewCoreController(s CoreCallbackHandler) *CoreController {
+	coreapplog.RegisterHandlerCreator(coreapplog.LogType_Console,
+		func(lt coreapplog.LogType,
+			options coreapplog.HandlerCreatorOptions) (corecommlog.Handler, error) {
+			return corecommlog.NewLogger(createStdoutLogWriter()), nil
+		})
+
+	return &CoreController{
+		CallbackHandler: s,
+	}
+}
+
+// StartLoop initializes and starts the core processing loop
+// Thread-safe method that configures and runs the Xray core with the provided configuration
+// Returns immediately if the core is already running
+func (x *CoreController) StartLoop(configContent string) (err error) {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if x.IsRunning {
+		log.Println("The instance is already running")
+		return nil
+	}
+
+	err = x.doStartLoop(configContent)
+	return
+}
+
+// StopLoop safely stops the core processing loop and releases resources
+// Thread-safe method that shuts down the core instance and triggers necessary callbacks
+func (x *CoreController) StopLoop() error {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if x.IsRunning {
+		x.doShutdown()
+		log.Println("Shut down the running instance")
+		x.CallbackHandler.OnEmitStatus(0, "Closed")
+	}
+	return nil
+}
+
+// QueryStats retrieves and resets traffic statistics for a specific outbound tag and direction
+// Returns the accumulated traffic value and resets the counter to zero
+// Returns 0 if the stats manager is not initialized or the counter doesn't exist
+func (x *CoreController) QueryStats(tag string, direct string) int64 {
+	if x.statsManager == nil {
+		return 0
+	}
+	counter := x.statsManager.GetCounter(fmt.Sprintf("outbound>>>%s>>>traffic>>>%s", tag, direct))
+	if counter == nil {
+		return 0
+	}
+	return counter.Set(0)
+}
+
+// MeasureDelay measures network latency to a specified URL through the current core instance
+// Uses a 12-second timeout context and returns the round-trip time in milliseconds
+// An error is returned if the connection fails or returns an unexpected status
+func (x *CoreController) MeasureDelay(url string) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	return measureInstDelay(ctx, x.CoreInstance, url)
+}
+
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
-	config, err := v2serial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
 	if err != nil {
 		return -1, fmt.Errorf("failed to load JSON config: %w", err)
 	}
@@ -217,7 +161,7 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	}
 	config.App = essentialApp
 
-	inst, err := v2core.New(config)
+	inst, err := core.New(config)
 	if err != nil {
 		return -1, fmt.Errorf("failed to create core instance: %w", err)
 	}
@@ -227,31 +171,53 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	return measureInstDelay(context.Background(), inst, url)
 }
 
-// NewV2RayPoint creates a new V2RayPoint instance
-func NewV2RayPoint(s V2RayVPNServiceSupportsSet, adns bool) *V2RayPoint {
-	v2applog.RegisterHandlerCreator(v2applog.LogType_Console,
-		func(lt v2applog.LogType,
-			options v2applog.HandlerCreatorOptions) (v2commlog.Handler, error) {
-			return v2commlog.NewLogger(createStdoutLogWriter()), nil
-		})
-
-	dialer := NewProtectedDialer(s)
-	v2internet.UseAlternativeSystemDialer(dialer)
-	return &V2RayPoint{
-		SupportSet:   s,
-		dialer:       dialer,
-		AsyncResolve: adns,
-	}
+// CheckVersionX returns the library and Xray versions
+func CheckVersionX() string {
+	var version = 31
+	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, core.Version())
 }
 
-// CheckVersionX returns the library and V2Ray versions
-func CheckVersionX() string {
-	var version = 30
-	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, v2core.Version())
+// doShutdown shuts down the Xray instance and cleans up resources
+func (x *CoreController) doShutdown() {
+	if x.CoreInstance != nil {
+		x.CoreInstance.Close()
+		x.CoreInstance = nil
+	}
+	x.IsRunning = false
+	x.statsManager = nil
+}
+
+// doStartLoop sets up and starts the Xray core
+func (x *CoreController) doStartLoop(configContent string) error {
+	log.Println("Loading core config")
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+	if err != nil {
+		return fmt.Errorf("failed to load core config: %w", err)
+	}
+
+	log.Println("Creating new core instance")
+	x.CoreInstance, err = core.New(config)
+	if err != nil {
+		return fmt.Errorf("failed to create core instance: %w", err)
+	}
+	x.statsManager = x.CoreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+
+	log.Println("Starting core")
+	x.IsRunning = true
+	if err := x.CoreInstance.Start(); err != nil {
+		x.IsRunning = false
+		return fmt.Errorf("failed to start core: %w", err)
+	}
+
+	x.CallbackHandler.Startup()
+	x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
+
+	log.Println("Starting core successfully")
+	return nil
 }
 
 // measureInstDelay measures the delay for an instance to a given URL
-func measureInstDelay(ctx context.Context, inst *v2core.Instance, url string) (int64, error) {
+func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
 	if inst == nil {
 		return -1, errors.New("core instance is nil")
 	}
@@ -260,11 +226,11 @@ func measureInstDelay(ctx context.Context, inst *v2core.Instance, url string) (i
 		TLSHandshakeTimeout: 6 * time.Second,
 		DisableKeepAlives:   true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dest, err := v2net.ParseDestination(fmt.Sprintf("%s:%s", network, addr))
+			dest, err := corenet.ParseDestination(fmt.Sprintf("%s:%s", network, addr))
 			if err != nil {
 				return nil, err
 			}
-			return v2core.Dial(ctx, inst, dest)
+			return core.Dial(ctx, inst, dest)
 		},
 	}
 
@@ -290,12 +256,6 @@ func measureInstDelay(ctx context.Context, inst *v2core.Instance, url string) (i
 	return time.Since(start).Milliseconds(), nil
 }
 
-// consoleLogWriter creates our own log writer without datetime stamp
-// As Android adds time stamps on each line
-type consoleLogWriter struct {
-	logger *log.Logger
-}
-
 func (w *consoleLogWriter) Write(s string) error {
 	w.logger.Print(s)
 	return nil
@@ -306,8 +266,8 @@ func (w *consoleLogWriter) Close() error {
 }
 
 // createStdoutLogWriter creates a logger that won't print date/time stamps
-func createStdoutLogWriter() v2commlog.WriterCreator {
-	return func() v2commlog.Writer {
+func createStdoutLogWriter() corecommlog.WriterCreator {
+	return func() corecommlog.Writer {
 		return &consoleLogWriter{
 			logger: log.New(os.Stdout, "", 0),
 		}
