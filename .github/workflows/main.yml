@@ -1,17 +1,12 @@
-name: Build
+name: Build and Release
 
 on:
   workflow_dispatch:
-    inputs:
-      release_tag:
-        required: false
-        type: string
-  pull_request:
-    branches:
-      - main
+  release:
+    types: [published]
   push:
-    branches:
-      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -52,19 +47,19 @@ jobs:
          gomobile init
          go mod tidy
          gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
- 
+
     - name: Upload build artifacts
-      if: github.event.inputs.release_tag == ''
       uses: actions/upload-artifact@v4.6.2
       with:
         name: libv2ray
         path: |
           ${{ github.workspace }}/libv2ray*r
-
+          
     - name: Upload AndroidLibXrayLite to release
-      if: github.event.inputs.release_tag != ''
+      if: github.event_name == 'release'
       uses: svenstaro/upload-release-action@v2
       with:
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: ./libv2ray*r
-        tag: ${{ github.event.inputs.release_tag }}
+        tag: ${{ github.ref }}
         file_glob: true
