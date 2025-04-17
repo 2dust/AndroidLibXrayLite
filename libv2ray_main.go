@@ -53,46 +53,48 @@ type consoleLogWriter struct {
 
 func InitCoreEnv(envPath string, key string) {
 	if len(envPath) > 0 {
-		if err := os.Setenv(coreAsset, envPath); err != nil { // Line 63: Error handling added
+		if err := os.Setenv(coreAsset, envPath); err != nil {
 			log.Printf("failed to set %s: %v", coreAsset, err)
 		}
-		if err := os.Setenv(coreCert, envPath); err != nil { // Line 64: Error handling added
+		if err := os.Setenv(coreCert, envPath); err != nil {
 			log.Printf("failed to set %s: %v", coreCert, err)
 		}
 	}
 	if len(key) > 0 {
-		if err := os.Setenv(xudpBaseKey, key); err != nil { // Line 67: Error handling added
+		if err := os.Setenv(xudpBaseKey, key); err != nil {
 			log.Printf("failed to set %s: %v", xudpBaseKey, err)
 		}
 	}
 
 	corefilesystem.NewFileReader = func(path string) (io.ReadCloser, error) {
-		// G304 Fix: Path validation
+		// G304 Fix: Path validation with baseDir and cleanPath
 		baseDir := envPath
 		cleanPath := filepath.Clean(path)
 		fullPath := filepath.Join(baseDir, cleanPath)
+		
+		// Prevent Path Traversal
 		if baseDir != "" && !strings.HasPrefix(fullPath, baseDir) {
-			return nil, fmt.Errorf("unauthorized file path: %s", path)
+			return nil, fmt.Errorf("unauthorized path: %s", path)
 		}
 
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			_, file := filepath.Split(fullPath)
 			return mobasset.Open(file)
 		} else if err != nil {
-			return nil, fmt.Errorf("failed to stat file: %w", err)
+			return nil, fmt.Errorf("file stat error: %w", err)
 		}
-		return os.Open(fullPath) // Line 76: Validated path
+		return os.Open(fullPath) // #nosec G304 // Explanation: Path validated before opening
 	}
 }
 
 func NewCoreController(s CoreCallbackHandler) *CoreController {
-	if err := coreapplog.RegisterHandlerCreator( // Lines 83-87: Error handling added
+	if err := coreapplog.RegisterHandlerCreator(
 		coreapplog.LogType_Console,
 		func(lt coreapplog.LogType, options coreapplog.HandlerCreatorOptions) (corecommlog.Handler, error) {
 			return corecommlog.NewLogger(createStdoutLogWriter()), nil
 		},
 	); err != nil {
-		log.Printf("failed to register log handler: %v", err)
+		log.Printf("log handler registration error: %v", err)
 	}
 
 	return &CoreController{
@@ -105,7 +107,7 @@ func (x *CoreController) StartLoop(configContent string) (err error) {
 	defer x.coreMutex.Unlock()
 
 	if x.IsRunning {
-		log.Println("The instance is already running")
+		log.Println("Service is already running")
 		return nil
 	}
 
@@ -119,7 +121,7 @@ func (x *CoreController) StopLoop() error {
 
 	if x.IsRunning {
 		x.doShutdown()
-		log.Println("Shut down the running instance")
+		log.Println("Service stopped")
 		x.CallbackHandler.OnEmitStatus(0, "Closed")
 	}
 	return nil
@@ -146,7 +148,7 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
 	if err != nil {
-		return -1, fmt.Errorf("failed to load JSON config: %w", err)
+		return -1, fmt.Errorf("config load error: %w", err)
 	}
 
 	config.Inbound = nil
@@ -160,15 +162,15 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 	inst, err := core.New(config)
 	if err != nil {
-		return -1, fmt.Errorf("failed to create core instance: %w", err)
+		return -1, fmt.Errorf("instance creation error: %w", err)
 	}
 
-	if err := inst.Start(); err != nil { // Line 169: Error handling added
-		return -1, fmt.Errorf("failed to start core instance: %w", err)
+	if err := inst.Start(); err != nil {
+		return -1, fmt.Errorf("startup error: %w", err)
 	}
 	defer func() {
-		if err := inst.Close(); err != nil { // Line 170: Error handling added
-			log.Printf("failed to close instance: %v", err)
+		if err := inst.Close(); err != nil {
+			log.Printf("instance close error: %v", err)
 		}
 	}()
 	return measureInstDelay(context.Background(), inst, url)
@@ -176,8 +178,8 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 func (x *CoreController) doShutdown() {
 	if x.CoreInstance != nil {
-		if err := x.CoreInstance.Close(); err != nil { // Line 183: Error handling added
-			log.Printf("failed to close core instance: %v", err)
+		if err := x.CoreInstance.Close(); err != nil {
+			log.Printf("shutdown error: %v", err)
 		}
 		x.CoreInstance = nil
 	}
@@ -186,41 +188,41 @@ func (x *CoreController) doShutdown() {
 }
 
 func (x *CoreController) doStartLoop(configContent string) error {
-	log.Println("Loading core config")
+	log.Println("Loading config")
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
-		return fmt.Errorf("failed to load core config: %w", err)
+		return fmt.Errorf("config load error: %w", err)
 	}
 
-	log.Println("Creating new core instance")
+	log.Println("Creating new instance")
 	x.CoreInstance, err = core.New(config)
 	if err != nil {
-		return fmt.Errorf("failed to create core instance: %w", err)
+		return fmt.Errorf("instance creation error: %w", err)
 	}
 	x.statsManager = x.CoreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
 
-	log.Println("Starting core")
+	log.Println("Starting service")
 	x.IsRunning = true
 	if err := x.CoreInstance.Start(); err != nil {
 		x.IsRunning = false
-		return fmt.Errorf("failed to start core: %w", err)
+		return fmt.Errorf("startup error: %w", err)
 	}
 
 	x.CallbackHandler.Startup()
-	x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
+	x.CallbackHandler.OnEmitStatus(0, "Started successfully")
 
-	log.Println("Starting core successfully")
+	log.Println("Service started successfully")
 	return nil
 }
 
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
 	if inst == nil {
-		return -1, errors.New("core instance is nil")
+		return -1, errors.New("instance is nil")
 	}
 
 	tr := &http.Transport{
-		TLSHandshakeTimeout: 6*time.Second,
-		DisableKeepAlives: true,
+		TLSHandshakeTimeout: 6 * time.Second,
+		DisableKeepAlives:   true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dest, err := corenet.ParseDestination(fmt.Sprintf("%s:%s", network, addr))
 			if err != nil {
@@ -232,7 +234,7 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 
 	client := &http.Client{
 		Transport: tr,
-		Timeout: 12*time.Second,
+		Timeout:   12 * time.Second,
 	}
 
 	if len(url) == 0 {
