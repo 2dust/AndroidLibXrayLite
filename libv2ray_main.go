@@ -33,6 +33,126 @@ const (
 )
 
 // CoreController represents a controller for managing Xray core instance lifecycle
+func InitCoreEnv(envPath string, key string) {
+	if len(envPath) > 0 {
+		if err := os.Setenv(coreAsset, envPath); err != nil {
+			log.Printf("failed to set %s: %v", coreAsset, err)
+		}
+		if err := os.Setenv(coreCert, envPath); err != nil {
+			log.Printf("failed to set %s: %v", coreCert, err)
+		}
+	}
+	if len(key) > 0 {
+		if err := os.Setenv(xudpBaseKey, key); err != nil {
+			log.Printf("failed to set %s: %v", xudpBaseKey, err)
+		}
+	}
+
+	corefilesystem.NewFileReader = func(path string) (io.ReadCloser, error) {
+		// G304: Prevent path traversal attacks
+		baseDir := envPath
+		cleanPath := filepath.Clean(path)
+		fullPath := filepath.Join(baseDir, cleanPath)
+		if baseDir != "" && !strings.HasPrefix(fullPath, baseDir) {
+			return nil, fmt.Errorf("unauthorized file path: %s", path)
+		}
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			_, file := filepath.Split(fullPath)
+			return mobasset.Open(file)
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to stat file: %w", err)
+		}
+		f, err := os.Open(fullPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open file: %w", err)
+		}
+		return f, nil
+	}
+}
+
+func NewCoreController(s CoreCallbackHandler) *CoreController {
+	if err := coreapplog.RegisterHandlerCreator(
+		coreapplog.LogType_Console,
+		func(lt coreapplog.LogType, options coreapplog.HandlerCreatorOptions) (corecommlog.Handler, error) {
+			return corecommlog.NewLogger(createStdoutLogWriter()), nil
+		},
+	); err != nil {
+		log.Printf("failed to register log handler: %v", err)
+	}
+	return &CoreController{
+		CallbackHandler: s,
+	}
+}
+
+func (x *CoreController) doShutdown() {
+	if x.CoreInstance != nil {
+		if err := x.CoreInstance.Close(); err != nil {
+			log.Printf("failed to close core instance: %v", err)
+		}
+		x.CoreInstance = nil
+	}
+	x.IsRunning = false
+	x.statsManager = nil
+}
+
+func (x *CoreController) doStartLoop(configContent string) error {
+	log.Println("Loading core config")
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+	if err != nil {
+		return fmt.Errorf("failed to load core config: %w", err)
+	}
+
+	log.Println("Creating new core instance")
+	x.CoreInstance, err = core.New(config)
+	if err != nil {
+		return fmt.Errorf("failed to create core instance: %w", err)
+	}
+	x.statsManager = x.CoreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+
+	log.Println("Starting core")
+	x.IsRunning = true
+	if err := x.CoreInstance.Start(); err != nil {
+		x.IsRunning = false
+		return fmt.Errorf("failed to start core: %w", err)
+	}
+
+	x.CallbackHandler.Startup()
+	x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
+
+	log.Println("Starting core successfully")
+	return nil
+}
+
+func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
+	if err != nil {
+		return -1, fmt.Errorf("failed to load JSON config: %w", err)
+	}
+
+	config.Inbound = nil
+	var essentialApp []*serial.TypedMessage
+	for _, app := range config.App {
+		if app.Type == "xray.app.proxyman.OutboundConfig" || app.Type == "xray.app.dispatcher.Config" || app.Type == "xray.app.log.Config" {
+			essentialApp = append(essentialApp, app)
+		}
+	}
+	config.App = essentialApp
+
+	inst, err := core.New(config)
+	if err != nil {
+		return -1, fmt.Errorf("failed to create core instance: %w", err)
+	}
+
+	if err := inst.Start(); err != nil {
+		return -1, fmt.Errorf("failed to start core instance: %w", err)
+	}
+	defer func() {
+		if err := inst.Close(); err != nil {
+			log.Printf("failed to close instance: %v", err)
+		}
+	}()
+	return measureInstDelay(context.Background(), inst, url)
+}
 type CoreController struct {
 	CallbackHandler CoreCallbackHandler
 	statsManager    corestats.Manager
@@ -58,117 +178,7 @@ type consoleLogWriter struct {
 // InitCoreEnv initializes environment variables and file system handlers for the core
 // It sets up asset path, certificate path, XUDP base key and customizes the file reader
 // to support Android asset system
-func InitCoreEnv(envPath string, key string) {
-	if len(envPath) > 0 {
-		os.Setenv(coreAsset, envPath)
-		os.Setenv(coreCert, envPath)
-	}
-	if len(key) > 0 {
-		os.Setenv(xudpBaseKey, key)
 
-	}
-
-	corefilesystem.NewFileReader = func(path string) (io.ReadCloser, error) {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			_, file := filepath.Split(path)
-			return mobasset.Open(file)
-		}
-		return os.Open(path)
-	}
-}
-
-// NewCoreController initializes and returns a new CoreController instance
-// Sets up the console log handler and associates it with the provided callback handler
-func NewCoreController(s CoreCallbackHandler) *CoreController {
-	coreapplog.RegisterHandlerCreator(coreapplog.LogType_Console,
-		func(lt coreapplog.LogType,
-			options coreapplog.HandlerCreatorOptions) (corecommlog.Handler, error) {
-			return corecommlog.NewLogger(createStdoutLogWriter()), nil
-		})
-
-	return &CoreController{
-		CallbackHandler: s,
-	}
-}
-
-// StartLoop initializes and starts the core processing loop
-// Thread-safe method that configures and runs the Xray core with the provided configuration
-// Returns immediately if the core is already running
-func (x *CoreController) StartLoop(configContent string) (err error) {
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
-
-	if x.IsRunning {
-		log.Println("The instance is already running")
-		return nil
-	}
-
-	err = x.doStartLoop(configContent)
-	return
-}
-
-// StopLoop safely stops the core processing loop and releases resources
-// Thread-safe method that shuts down the core instance and triggers necessary callbacks
-func (x *CoreController) StopLoop() error {
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
-
-	if x.IsRunning {
-		x.doShutdown()
-		log.Println("Shut down the running instance")
-		x.CallbackHandler.OnEmitStatus(0, "Closed")
-	}
-	return nil
-}
-
-// QueryStats retrieves and resets traffic statistics for a specific outbound tag and direction
-// Returns the accumulated traffic value and resets the counter to zero
-// Returns 0 if the stats manager is not initialized or the counter doesn't exist
-func (x *CoreController) QueryStats(tag string, direct string) int64 {
-	if x.statsManager == nil {
-		return 0
-	}
-	counter := x.statsManager.GetCounter(fmt.Sprintf("outbound>>>%s>>>traffic>>>%s", tag, direct))
-	if counter == nil {
-		return 0
-	}
-	return counter.Set(0)
-}
-
-// MeasureDelay measures network latency to a specified URL through the current core instance
-// Uses a 12-second timeout context and returns the round-trip time in milliseconds
-// An error is returned if the connection fails or returns an unexpected status
-func (x *CoreController) MeasureDelay(url string) (int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
-
-	return measureInstDelay(ctx, x.CoreInstance, url)
-}
-
-// MeasureOutboundDelay measures the outbound delay for a given configuration and URL
-func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
-	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
-	if err != nil {
-		return -1, fmt.Errorf("failed to load JSON config: %w", err)
-	}
-
-	config.Inbound = nil
-	var essentialApp []*serial.TypedMessage
-	for _, app := range config.App {
-		if app.Type == "xray.app.proxyman.OutboundConfig" || app.Type == "xray.app.dispatcher.Config" || app.Type == "xray.app.log.Config" {
-			essentialApp = append(essentialApp, app)
-		}
-	}
-	config.App = essentialApp
-
-	inst, err := core.New(config)
-	if err != nil {
-		return -1, fmt.Errorf("failed to create core instance: %w", err)
-	}
-
-	inst.Start()
-	defer inst.Close()
-	return measureInstDelay(context.Background(), inst, url)
 }
 
 // CheckVersionX returns the library and Xray versions
