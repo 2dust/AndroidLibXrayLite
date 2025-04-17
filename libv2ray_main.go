@@ -318,3 +318,4 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 		DisableKeepAlives:   true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dest, err := core
+}
