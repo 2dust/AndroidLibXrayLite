@@ -26,32 +26,38 @@ import (
 	mobasset "golang.org/x/mobile/asset"
 )
 
+// Constants for environment variables
 const (
-	coreAsset   = "xray.location.asset"
-	coreCert    = "xray.location.cert"
-	xudpBaseKey = "xray.xudp.basekey"
+	coreAsset   = "xray.location.asset"  // Path to assets directory
+	coreCert    = "xray.location.cert"   // Path to certificates
+	xudpBaseKey = "xray.xudp.basekey"    // XUDP encryption key
 )
 
+// CoreController manages Xray core instance
 type CoreController struct {
-	CallbackHandler CoreCallbackHandler
-	statsManager    corestats.Manager
-	coreMutex       sync.Mutex
-	CoreInstance    *core.Instance
-	IsRunning       bool
+	CallbackHandler CoreCallbackHandler // System callback handler
+	statsManager    corestats.Manager   // Traffic statistics
+	coreMutex       sync.Mutex          // Mutex for thread safety
+	CoreInstance    *core.Instance      // Xray core instance
+	IsRunning       bool                // Service status flag
 }
 
+// CoreCallbackHandler defines system callbacks
 type CoreCallbackHandler interface {
-	Startup() int
-	Shutdown() int
-	Protect(int) bool
-	OnEmitStatus(int, string) int
+	Startup() int              // Triggered on core start
+	Shutdown() int             // Triggered on core shutdown
+	Protect(int) bool          // VPN protect socket
+	OnEmitStatus(int, string) int // Status reporting
 }
 
+// consoleLogWriter implements custom log writer
 type consoleLogWriter struct {
-	logger *log.Logger
+	logger *log.Logger // Standard logger
 }
 
+// InitCoreEnv initializes core environment
 func InitCoreEnv(envPath string, key string) {
+	// Set asset/cert paths
 	if len(envPath) > 0 {
 		if err := os.Setenv(coreAsset, envPath); err != nil {
 			log.Printf("failed to set %s: %v", coreAsset, err)
@@ -60,41 +66,48 @@ func InitCoreEnv(envPath string, key string) {
 			log.Printf("failed to set %s: %v", coreCert, err)
 		}
 	}
+
+	// Set XUDP encryption key
 	if len(key) > 0 {
 		if err := os.Setenv(xudpBaseKey, key); err != nil {
 			log.Printf("failed to set %s: %v", xudpBaseKey, err)
 		}
 	}
 
+	// Custom file reader with path validation
 	corefilesystem.NewFileReader = func(path string) (io.ReadCloser, error) {
-		// G304 Fix: Path validation with baseDir and cleanPath
+		// G304 Fix - Path sanitization
 		baseDir := envPath
 		cleanPath := filepath.Clean(path)
 		fullPath := filepath.Join(baseDir, cleanPath)
-		
-		// Prevent Path Traversal
+
+		// Prevent directory traversal
 		if baseDir != "" && !strings.HasPrefix(fullPath, baseDir) {
 			return nil, fmt.Errorf("unauthorized path: %s", path)
 		}
 
+		// Check file existence
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			_, file := filepath.Split(fullPath)
-			return mobasset.Open(file)
+			return mobasset.Open(file) // Fallback to assets
 		} else if err != nil {
-			return nil, fmt.Errorf("file stat error: %w", err)
+			return nil, fmt.Errorf("file access error: %w", err)
 		}
-		return os.Open(fullPath) // #nosec G304 // Explanation: Path validated before opening
+
+		return os.Open(fullPath) // #nosec G304 - Validated path
 	}
 }
 
+// NewCoreController creates controller instance
 func NewCoreController(s CoreCallbackHandler) *CoreController {
+	// Register custom logger
 	if err := coreapplog.RegisterHandlerCreator(
 		coreapplog.LogType_Console,
 		func(lt coreapplog.LogType, options coreapplog.HandlerCreatorOptions) (corecommlog.Handler, error) {
 			return corecommlog.NewLogger(createStdoutLogWriter()), nil
 		},
 	); err != nil {
-		log.Printf("log handler registration error: %v", err)
+		log.Printf("logger registration failed: %v", err)
 	}
 
 	return &CoreController{
@@ -102,31 +115,32 @@ func NewCoreController(s CoreCallbackHandler) *CoreController {
 	}
 }
 
+// StartLoop launches Xray core
 func (x *CoreController) StartLoop(configContent string) (err error) {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
 	if x.IsRunning {
-		log.Println("Service is already running")
+		log.Println("core already running")
 		return nil
 	}
 
-	err = x.doStartLoop(configContent)
-	return
+	return x.doStartLoop(configContent)
 }
 
+// StopLoop terminates Xray core
 func (x *CoreController) StopLoop() error {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
 	if x.IsRunning {
 		x.doShutdown()
-		log.Println("Service stopped")
-		x.CallbackHandler.OnEmitStatus(0, "Closed")
+		x.CallbackHandler.OnEmitStatus(0, "core stopped")
 	}
 	return nil
 }
 
+// QueryStats retrieves traffic statistics
 func (x *CoreController) QueryStats(tag string, direct string) int64 {
 	if x.statsManager == nil {
 		return 0
@@ -138,23 +152,27 @@ func (x *CoreController) QueryStats(tag string, direct string) int64 {
 	return counter.Set(0)
 }
 
+// MeasureDelay tests network latency
 func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-
 	return measureInstDelay(ctx, x.CoreInstance, url)
 }
 
+// MeasureOutboundDelay tests outbound connection
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
 	if err != nil {
 		return -1, fmt.Errorf("config load error: %w", err)
 	}
 
+	// Simplify config for testing
 	config.Inbound = nil
 	var essentialApp []*serial.TypedMessage
 	for _, app := range config.App {
-		if app.Type == "xray.app.proxyman.OutboundConfig" || app.Type == "xray.app.dispatcher.Config" || app.Type == "xray.app.log.Config" {
+		if app.Type == "xray.app.proxyman.OutboundConfig" || 
+		   app.Type == "xray.app.dispatcher.Config" || 
+		   app.Type == "xray.app.log.Config" {
 			essentialApp = append(essentialApp, app)
 		}
 	}
@@ -162,24 +180,22 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 	inst, err := core.New(config)
 	if err != nil {
-		return -1, fmt.Errorf("instance creation error: %w", err)
+		return -1, fmt.Errorf("instance creation failed: %w", err)
 	}
 
 	if err := inst.Start(); err != nil {
-		return -1, fmt.Errorf("startup error: %w", err)
+		return -1, fmt.Errorf("startup failed: %w", err)
 	}
-	defer func() {
-		if err := inst.Close(); err != nil {
-			log.Printf("instance close error: %v", err)
-		}
-	}()
+	defer inst.Close()
+
 	return measureInstDelay(context.Background(), inst, url)
 }
 
+// Internal shutdown handler
 func (x *CoreController) doShutdown() {
 	if x.CoreInstance != nil {
 		if err := x.CoreInstance.Close(); err != nil {
-			log.Printf("shutdown error: %v", err)
+			log.Printf("core shutdown error: %v", err)
 		}
 		x.CoreInstance = nil
 	}
@@ -187,37 +203,36 @@ func (x *CoreController) doShutdown() {
 	x.statsManager = nil
 }
 
+// Core startup logic
 func (x *CoreController) doStartLoop(configContent string) error {
-	log.Println("Loading config")
+	log.Println("initializing core...")
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
-		return fmt.Errorf("config load error: %w", err)
+		return fmt.Errorf("config error: %w", err)
 	}
 
-	log.Println("Creating new instance")
 	x.CoreInstance, err = core.New(config)
 	if err != nil {
-		return fmt.Errorf("instance creation error: %w", err)
+		return fmt.Errorf("core init failed: %w", err)
 	}
 	x.statsManager = x.CoreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
 
-	log.Println("Starting service")
+	log.Println("starting core...")
 	x.IsRunning = true
 	if err := x.CoreInstance.Start(); err != nil {
 		x.IsRunning = false
-		return fmt.Errorf("startup error: %w", err)
+		return fmt.Errorf("startup failed: %w", err)
 	}
 
 	x.CallbackHandler.Startup()
-	x.CallbackHandler.OnEmitStatus(0, "Started successfully")
-
-	log.Println("Service started successfully")
+	x.CallbackHandler.OnEmitStatus(0, "core started")
 	return nil
 }
 
+// Network delay measurement
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
 	if inst == nil {
-		return -1, errors.New("instance is nil")
+		return -1, errors.New("nil instance")
 	}
 
 	tr := &http.Transport{
@@ -237,9 +252,10 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 		Timeout:   12 * time.Second,
 	}
 
-	if len(url) == 0 {
+	if url == "" {
 		url = "https://www.google.com/generate_204"
 	}
+
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -249,11 +265,12 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return -1, fmt.Errorf("unexpected status code: %s", resp.Status)
+		return -1, fmt.Errorf("invalid status: %s", resp.Status)
 	}
 	return time.Since(start).Milliseconds(), nil
 }
 
+// Log writer implementation
 func (w *consoleLogWriter) Write(s string) error {
 	w.logger.Print(s)
 	return nil
@@ -263,6 +280,7 @@ func (w *consoleLogWriter) Close() error {
 	return nil
 }
 
+// Create stdout logger
 func createStdoutLogWriter() corecommlog.WriterCreator {
 	return func() corecommlog.Writer {
 		return &consoleLogWriter{
