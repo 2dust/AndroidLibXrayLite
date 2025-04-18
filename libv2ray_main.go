@@ -246,7 +246,7 @@ func (x *CoreController) doStartLoop(configContent string) error {
 	return nil
 }
 
-// Network delay measurement
+// measureInstDelay measures the delay for an instance to a given URL
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
 	if inst == nil {
 		return -1, errors.New("nil instance")
