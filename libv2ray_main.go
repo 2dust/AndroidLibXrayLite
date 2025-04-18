@@ -35,19 +35,20 @@ const (
 
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
-	CallbackHandler CoreCallbackHandler // System callback handler
-	statsManager    corestats.Manager   // Traffic statistics
-	coreMutex       sync.Mutex          // Mutex for thread safety
-	CoreInstance    *core.Instance      // Xray core instance
-	IsRunning       bool                // Service status flag
+
+	CallbackHandler CoreCallbackHandler
+	statsManager    corestats.Manager
+	coreMutex       sync.Mutex
+	coreInstance    *core.Instance
+	IsRunning       bool
 }
 
 // CoreCallbackHandler defines interface for receiving callbacks and notifications from the core service
 type CoreCallbackHandler interface {
-	Startup() int              // Triggered on core start
-	Shutdown() int             // Triggered on core shutdown
-	Protect(int) bool          // VPN protect socket
-	OnEmitStatus(int, string) int // Status reporting
+	
+	Startup() int
+	Shutdown() int
+	OnEmitStatus(int, string) int
 }
 
 // consoleLogWriter implements a log writer without datetime stamps
@@ -167,7 +168,7 @@ func (x *CoreController) QueryStats(tag string, direct string) int64 {
 func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	return measureInstDelay(ctx, x.CoreInstance, url)
+	return measureInstDelay(ctx, x.coreInstance, url)
 }
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
@@ -210,11 +211,9 @@ func CheckVersionX() string {
 
 // doShutdown shuts down the Xray instance and cleans up resources
 func (x *CoreController) doShutdown() {
-	if x.CoreInstance != nil {
-		if err := x.CoreInstance.Close(); err != nil {
-			log.Printf("core shutdown error: %v", err)
-		}
-		x.CoreInstance = nil
+	if x.coreInstance != nil {
+		x.coreInstance.Close()
+		x.coreInstance = nil
 	}
 	x.IsRunning = false
 	x.statsManager = nil
@@ -228,15 +227,16 @@ func (x *CoreController) doStartLoop(configContent string) error {
 		return fmt.Errorf("config error: %w", err)
 	}
 
-	x.CoreInstance, err = core.New(config)
+	log.Println("Creating new core instance")
+	x.coreInstance, err = core.New(config)
 	if err != nil {
 		return fmt.Errorf("core init failed: %w", err)
 	}
-	x.statsManager = x.CoreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	x.statsManager = x.coreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
 
 	log.Println("starting core...")
 	x.IsRunning = true
-	if err := x.CoreInstance.Start(); err != nil {
+	if err := x.coreInstance.Start(); err != nil {
 		x.IsRunning = false
 		return fmt.Errorf("startup failed: %w", err)
 	}
