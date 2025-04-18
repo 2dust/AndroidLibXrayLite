@@ -35,7 +35,6 @@ const (
 
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
-
 	CallbackHandler CoreCallbackHandler
 	statsManager    corestats.Manager
 	coreMutex       sync.Mutex
@@ -45,7 +44,6 @@ type CoreController struct {
 
 // CoreCallbackHandler defines interface for receiving callbacks and notifications from the core service
 type CoreCallbackHandler interface {
-	
 	Startup() int
 	Shutdown() int
 	OnEmitStatus(int, string) int
@@ -168,6 +166,7 @@ func (x *CoreController) QueryStats(tag string, direct string) int64 {
 func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
+	
 	return measureInstDelay(ctx, x.coreInstance, url)
 }
 
@@ -199,7 +198,6 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 		return -1, fmt.Errorf("startup failed: %w", err)
 	}
 	defer inst.Close()
-
 	return measureInstDelay(context.Background(), inst, url)
 }
 
