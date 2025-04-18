@@ -35,18 +35,18 @@ const (
 
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
-	CallbackHandler CoreCallbackHandler
-	statsManager    corestats.Manager
-	coreMutex       sync.Mutex
-	coreInstance    *core.Instance
-	IsRunning       bool
+	CallbackHandler CoreCallbackHandler // System callback handler
+ 	statsManager    corestats.Manager   // Traffic statistics
+ 	coreMutex       sync.Mutex          // Mutex for thread safety
+ 	coreInstance    *core.Instance      // Xray core instance
+ 	IsRunning       bool                // Service status flag
 }
 
 // CoreCallbackHandler defines interface for receiving callbacks and notifications from the core service
 type CoreCallbackHandler interface {
-	Startup() int
-	Shutdown() int
-	OnEmitStatus(int, string) int
+	Startup() int              // Triggered on core start
+ 	Shutdown() int             // Triggered on core shutdown
+ 	OnEmitStatus(int, string) int // Status reporting
 }
 
 // consoleLogWriter implements a log writer without datetime stamps
@@ -210,8 +210,10 @@ func CheckVersionX() string {
 // doShutdown shuts down the Xray instance and cleans up resources
 func (x *CoreController) doShutdown() {
 	if x.coreInstance != nil {
-		x.coreInstance.Close()
-		x.coreInstance = nil
+ 		if err := x.coreInstance.Close(); err != nil {
+ 			log.Printf("core shutdown error: %v", err)
+ 		}
+ 		x.coreInstance = nil
 	}
 	x.IsRunning = false
 	x.statsManager = nil
@@ -225,7 +227,6 @@ func (x *CoreController) doStartLoop(configContent string) error {
 		return fmt.Errorf("config error: %w", err)
 	}
 
-	log.Println("Creating new core instance")
 	x.coreInstance, err = core.New(config)
 	if err != nil {
 		return fmt.Errorf("core init failed: %w", err)
