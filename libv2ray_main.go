@@ -37,7 +37,7 @@ type CoreController struct {
 	CallbackHandler CoreCallbackHandler
 	statsManager    corestats.Manager
 	coreMutex       sync.Mutex
-	CoreInstance    *core.Instance
+	coreInstance    *core.Instance
 	IsRunning       bool
 }
 
@@ -45,7 +45,6 @@ type CoreController struct {
 type CoreCallbackHandler interface {
 	Startup() int
 	Shutdown() int
-	Protect(int) bool
 	OnEmitStatus(int, string) int
 }
 
@@ -142,7 +141,7 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	return measureInstDelay(ctx, x.CoreInstance, url)
+	return measureInstDelay(ctx, x.coreInstance, url)
 }
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
@@ -179,9 +178,9 @@ func CheckVersionX() string {
 
 // doShutdown shuts down the Xray instance and cleans up resources
 func (x *CoreController) doShutdown() {
-	if x.CoreInstance != nil {
-		x.CoreInstance.Close()
-		x.CoreInstance = nil
+	if x.coreInstance != nil {
+		x.coreInstance.Close()
+		x.coreInstance = nil
 	}
 	x.IsRunning = false
 	x.statsManager = nil
@@ -196,15 +195,15 @@ func (x *CoreController) doStartLoop(configContent string) error {
 	}
 
 	log.Println("Creating new core instance")
-	x.CoreInstance, err = core.New(config)
+	x.coreInstance, err = core.New(config)
 	if err != nil {
 		return fmt.Errorf("failed to create core instance: %w", err)
 	}
-	x.statsManager = x.CoreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	x.statsManager = x.coreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
 
 	log.Println("Starting core")
 	x.IsRunning = true
-	if err := x.CoreInstance.Start(); err != nil {
+	if err := x.coreInstance.Start(); err != nil {
 		x.IsRunning = false
 		return fmt.Errorf("failed to start core: %w", err)
 	}
