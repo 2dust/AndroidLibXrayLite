@@ -36,16 +36,16 @@ const (
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
 	CallbackHandler CoreCallbackHandler
- 	statsManager    corestats.Manager
- 	coreMutex       sync.Mutex
- 	coreInstance    *core.Instance
- 	IsRunning       bool
+	statsManager    corestats.Manager
+	coreMutex       sync.Mutex
+	coreInstance    *core.Instance
+	IsRunning       bool
 }
 
 // CoreCallbackHandler defines interface for receiving callbacks and notifications from the core service
 type CoreCallbackHandler interface {
 	Startup() int
- 	Shutdown() int
+	Shutdown() int
  	OnEmitStatus(int, string) int
 }
 
