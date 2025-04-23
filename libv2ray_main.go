@@ -46,7 +46,7 @@ type CoreController struct {
 type CoreCallbackHandler interface {
 	Startup() int
 	Shutdown() int
- 	OnEmitStatus(int, string) int
+	OnEmitStatus(int, string) int
 }
 
 // consoleLogWriter implements a log writer without datetime stamps
