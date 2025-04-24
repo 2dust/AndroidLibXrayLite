@@ -166,7 +166,7 @@ func (x *CoreController) QueryStats(tag string, direct string) int64 {
 func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	
+
 	return measureInstDelay(ctx, x.coreInstance, url)
 }
 
@@ -181,9 +181,9 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	config.Inbound = nil
 	var essentialApp []*serial.TypedMessage
 	for _, app := range config.App {
-		if app.Type == "xray.app.proxyman.OutboundConfig" || 
-		   app.Type == "xray.app.dispatcher.Config" || 
-		   app.Type == "xray.app.log.Config" {
+		if app.Type == "xray.app.proxyman.OutboundConfig" ||
+			app.Type == "xray.app.dispatcher.Config" ||
+			app.Type == "xray.app.log.Config" {
 			essentialApp = append(essentialApp, app)
 		}
 	}
@@ -210,10 +210,10 @@ func CheckVersionX() string {
 // doShutdown shuts down the Xray instance and cleans up resources
 func (x *CoreController) doShutdown() {
 	if x.coreInstance != nil {
- 		if err := x.coreInstance.Close(); err != nil {
- 			log.Printf("core shutdown error: %v", err)
- 		}
- 		x.coreInstance = nil
+		if err := x.coreInstance.Close(); err != nil {
+			log.Printf("core shutdown error: %v", err)
+		}
+		x.coreInstance = nil
 	}
 	x.IsRunning = false
 	x.statsManager = nil
