@@ -241,7 +241,9 @@ func (x *CoreController) doStartLoop(configContent string) error {
 	}
 
 	x.CallbackHandler.Startup()
-	x.CallbackHandler.OnEmitStatus(0, "core started")
+        x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
+
+        log.Println("Starting core successfully")
 	return nil
 }
 
