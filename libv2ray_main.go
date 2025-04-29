@@ -62,17 +62,17 @@ func InitCoreEnv(envPath string, key string) {
 	// Set asset/cert paths
 	if len(envPath) > 0 {
 		if err := os.Setenv(coreAsset, envPath); err != nil {
-			log.Printf("failed to set %s: %v", coreAsset, err)
+			log.Printf("Failed to set %s: %v", coreAsset, err)
 		}
 		if err := os.Setenv(coreCert, envPath); err != nil {
-			log.Printf("failed to set %s: %v", coreCert, err)
+			log.Printf("Failed to set %s: %v", coreCert, err)
 		}
 	}
 
 	// Set XUDP encryption key
 	if len(key) > 0 {
 		if err := os.Setenv(xudpBaseKey, key); err != nil {
-			log.Printf("failed to set %s: %v", xudpBaseKey, err)
+			log.Printf("Failed to set %s: %v", xudpBaseKey, err)
 		}
 	}
 
@@ -110,7 +110,7 @@ func NewCoreController(s CoreCallbackHandler) *CoreController {
 			return corecommlog.NewLogger(createStdoutLogWriter()), nil
 		},
 	); err != nil {
-		log.Printf("logger registration failed: %v", err)
+		log.Printf("Failed to register log handler: %v", err)
 	}
 
 	return &CoreController{
@@ -126,7 +126,7 @@ func (x *CoreController) StartLoop(configContent string) (err error) {
 	defer x.coreMutex.Unlock()
 
 	if x.IsRunning {
-		log.Println("core already running")
+		log.Println("Core is already running")
 		return nil
 	}
 
@@ -141,7 +141,7 @@ func (x *CoreController) StopLoop() error {
 
 	if x.IsRunning {
 		x.doShutdown()
-		x.CallbackHandler.OnEmitStatus(0, "core stopped")
+		x.CallbackHandler.OnEmitStatus(0, "Core stopped")
 	}
 	return nil
 }
@@ -241,9 +241,9 @@ func (x *CoreController) doStartLoop(configContent string) error {
 	}
 
 	x.CallbackHandler.Startup()
-        x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
+	x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
 
-        log.Println("Starting core successfully")
+	log.Println("Starting core successfully")
 	return nil
 }
 
