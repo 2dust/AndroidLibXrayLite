@@ -55,25 +55,26 @@ type consoleLogWriter struct {
 	logger *log.Logger // Standard logger
 }
 
+// setEnvVariable safely sets an environment variable and logs any errors encountered.
+func setEnvVariable(key, value string) {
+	if err := os.Setenv(key, value); err != nil {
+		log.Printf("Failed to set environment variable %s: %v. Please check your configuration.", key, err)
+	}
+}
+
 // InitCoreEnv initializes environment variables and file system handlers for the core
 // It sets up asset path, certificate path, XUDP base key and customizes the file reader
 // to support Android asset system
 func InitCoreEnv(envPath string, key string) {
 	// Set asset/cert paths
 	if len(envPath) > 0 {
-		if err := os.Setenv(coreAsset, envPath); err != nil {
-			log.Printf("Failed to set %s: %v", coreAsset, err)
-		}
-		if err := os.Setenv(coreCert, envPath); err != nil {
-			log.Printf("Failed to set %s: %v", coreCert, err)
-		}
+		setEnvVariable(coreAsset, envPath)
+		setEnvVariable(coreCert, envPath)
 	}
 
 	// Set XUDP encryption key
 	if len(key) > 0 {
-		if err := os.Setenv(xudpBaseKey, key); err != nil {
-			log.Printf("Failed to set %s: %v", xudpBaseKey, err)
-		}
+		setEnvVariable(xudpBaseKey, key)
 	}
 
 	// Custom file reader with path validation
