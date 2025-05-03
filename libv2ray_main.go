@@ -79,25 +79,18 @@ func InitCoreEnv(envPath string, key string) {
 
 	// Custom file reader with path validation
 	corefilesystem.NewFileReader = func(path string) (io.ReadCloser, error) {
-		// G304 Fix - Path sanitization
-		baseDir := envPath
-		cleanPath := filepath.Clean(path)
-		fullPath := filepath.Join(baseDir, cleanPath)
 
-		// Prevent directory traversal
-		if baseDir != "" && !strings.HasPrefix(fullPath, filepath.Clean(baseDir)) {
-			return nil, fmt.Errorf("unauthorized access attempt: %s", path)
+		
+		
+
+		
+		
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			_, file := filepath.Split(path)
+			return mobasset.Open(file)
+
 		}
-
-		// Check file existence
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			_, file := filepath.Split(fullPath)
-			return mobasset.Open(file) // Fallback to assets
-		} else if err != nil {
-			return nil, fmt.Errorf("file access error: %w", err)
-		}
-
-		return os.Open(fullPath) // #nosec G304 - Validated path
+		return os.Open(path)
 	}
 }
 
