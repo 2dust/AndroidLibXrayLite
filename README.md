@@ -3,7 +3,7 @@
 ## Build requirements
 * JDK
 * Android SDK
-* Go
+* Gob
 * gomobile
 
 ## Build instructions
