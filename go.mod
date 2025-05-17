@@ -3,7 +3,7 @@ module github.com/2dust/AndroidLibXrayLite
 go 1.24.3
 
 require (
-	github.com/xtls/xray-core v1.250306.1-0.20250430044058-87ab8e512882
+	github.com/xtls/xray-core v1.250306.1-0.20250516121834-800b8b50cc01
 	golang.org/x/mobile v0.0.0-20250506005352-78cd7a343bde
 )
 
@@ -32,7 +32,7 @@ require (
 	github.com/v2fly/ss-bloomring v0.0.0-20210312155135-28617310f63e // indirect
 	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
-	github.com/xtls/reality v0.0.0-20250513125209-514f8647eac0 // indirect
+	github.com/xtls/reality v0.0.0-20250516070713-4df2ec9a5b47 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/mock v0.5.2 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
