@@ -28,7 +28,8 @@ jobs:
     - name: Install gomobile
       run: |
         go install golang.org/x/mobile/cmd/gomobile@latest
-        export PATH=$PATH:~/go/bin
+        #It is usually not necessary unless the gomobile can't find it.
+        #export PATH=$PATH:~/go/bin
         
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3.2.0
@@ -42,7 +43,7 @@ jobs:
         echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
           --channel=3 \
           --install "ndk;29.0.13113456"
-        echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
 
     - name: Build
       run: |
