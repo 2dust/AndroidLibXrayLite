@@ -237,12 +237,12 @@ func (x *CoreController) doStartLoop(configContent string) error {
 // measureInstDelay measures the delay for an instance to a given URL
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
 	if inst == nil {
-		return -1, errors.New("nil instance")
+		return -1, errors.New("core instance is nil")
 	}
 
 	tr := &http.Transport{
 		TLSHandshakeTimeout: 6 * time.Second,
-		DisableKeepAlives:   true,
+		DisableKeepAlives:   false,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dest, err := corenet.ParseDestination(fmt.Sprintf("%s:%s", network, addr))
 			if err != nil {
@@ -261,18 +261,65 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 		url = "https://www.google.com/generate_204"
 	}
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-	start := time.Now()
-	resp, err := client.Do(req)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return -1, err
+		return -1, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return -1, fmt.Errorf("invalid status: %s", resp.Status)
+	var minDuration int64 = -1
+	success := false
+	var lastErr error
+
+	// Add exception handling and increase retry attempts
+	const attempts = 2
+	for i := 0; i < attempts; i++ {
+		select {
+		case <-ctx.Done():
+			// Return immediately when context is canceled
+			if !success {
+				return -1, ctx.Err()
+			}
+			return minDuration, nil
+		default:
+			// Continue execution
+		}
+
+		start := time.Now()
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Ensure response body is closed
+		defer func(resp *http.Response) {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+		}(resp)
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+			lastErr = fmt.Errorf("invalid status: %s", resp.Status)
+			continue
+		}
+
+		// Handle possible errors when reading response body
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			lastErr = fmt.Errorf("failed to read response body: %w", err)
+			continue
+		}
+
+		duration := time.Since(start).Milliseconds()
+		if !success || duration < minDuration {
+			minDuration = duration
+		}
+
+		success = true
 	}
-	return time.Since(start).Milliseconds(), nil
+	if !success {
+		return -1, lastErr
+	}
+	return minDuration, nil
 }
 
 // Log writer implementation
