@@ -190,7 +190,7 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 // CheckVersionX returns the library and Xray versions
 func CheckVersionX() string {
-	var version = 32
+	var version = 33
 	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, core.Version())
 }
 
