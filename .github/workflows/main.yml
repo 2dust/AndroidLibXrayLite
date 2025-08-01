@@ -42,7 +42,7 @@ jobs:
         echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
           --channel=3 \
           --install "ndk;29.0.13113456"
-        echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
 
     - name: Build
       run: |
