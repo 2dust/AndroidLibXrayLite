@@ -56,9 +56,20 @@ jobs:
       - name: Update and commit changes
         if: env.needs_update == 'true'
         run: |
-          go get golang.org/x/mobile@latest
+          # Lock gvisor version to a specific revision
+          go mod edit -replace=gvisor.dev/gvisor=gvisor.dev/gvisor@v0.0.0-20231020174304-b8a429915ff1
+          
+          # Update specific dependency
           go get github.com/xtls/xray-core@${{ env.LATEST_TAG_SHA }}
+
+          # Update all other dependencies
+          go get -u
+          go get gvisor.dev/gvisor@go
+          
+          # Clean up and verify module dependencies
           go mod tidy -v
+          
+          # Show changes
           git diff
 
       - name: Commit and push changes
