@@ -73,8 +73,8 @@ github.com/vishvananda/netns v0.0.5 h1:DfiHV+j8bA32MFM7bfEunvT8IAqQ/NzSJHtcmW5zd
 github.com/vishvananda/netns v0.0.5/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 github.com/xtls/reality v0.0.0-20250828044527-046fad5ab64f h1:o1Kryl9qEYYzNep9RId9DM1kBn8tBrcK5UJnti/l0NI=
 github.com/xtls/reality v0.0.0-20250828044527-046fad5ab64f/go.mod h1:XxvnCCgBee4WWE0bc4E+a7wbk8gkJ/rS0vNVNtC5qp0=
-github.com/xtls/xray-core v1.250803.1-0.20250829143322-81b7cd718ad5 h1:rBqCVgic8yIUVHB4h26K8JNuwJuNj45egsdXxwEvA7E=
-github.com/xtls/xray-core v1.250803.1-0.20250829143322-81b7cd718ad5/go.mod h1:WB/73DmN9Vs7lxtx4Xc/D0Ub1VUu06hAh1mMh8JN2uM=
+github.com/xtls/xray-core v1.250831.0 h1:0EWgE0eflLNqIudM/5c9SWA0Gegc3mgVsD5VNUqDHGE=
+github.com/xtls/xray-core v1.250831.0/go.mod h1:WB/73DmN9Vs7lxtx4Xc/D0Ub1VUu06hAh1mMh8JN2uM=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 go.opentelemetry.io/auto/sdk v1.1.0 h1:cH53jehLUN6UFLY71z+NDOiNJqDdPRaXzTel0sJySYA=
@@ -135,7 +135,7 @@ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C
 gopkg.in/yaml.v3 v3.0.0-20200605160147-a5ece683394c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-gvisor.dev/gvisor v0.0.0-20231020174304-b8a429915ff1 h1:qDCwdCWECGnwQSQC01Dpnp09fRHxJs9PbktotUqG+hs=
-gvisor.dev/gvisor v0.0.0-20231020174304-b8a429915ff1/go.mod h1:8hmigyCdYtw5xJGfQDJzSH5Ju8XEIDBnpyi8+O6GRt8=
+gvisor.dev/gvisor v0.0.0-20250606001031-fa4c4dd86b43 h1:BEymU11L8DZSC4GNK48JYIR8EcHs+gFxtg9YfYlp68c=
+gvisor.dev/gvisor v0.0.0-20250606001031-fa4c4dd86b43/go.mod h1:3r5CMtNQMKIvBlrmM9xWUNamjKBYPOWyXOjmg5Kts3g=
 lukechampine.com/blake3 v1.4.1 h1:I3Smz7gso8w4/TunLKec6K2fn+kyKtDxr/xcQEN84Wg=
 lukechampine.com/blake3 v1.4.1/go.mod h1:QFosUxmjB8mnrWFSNwKmvxHpfY72bmD2tQ0kBMM3kwo=
