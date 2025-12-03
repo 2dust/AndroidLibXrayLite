@@ -56,6 +56,16 @@ jobs:
       - name: Update and commit changes
         if: env.needs_update == 'true'
         run: |
+          # Sync Go version from upstream go.mod
+          EXTERNAL_REPO="XTLS/Xray-core"
+          GO_VERSION=$(curl -s https://raw.githubusercontent.com/$EXTERNAL_REPO/${{ env.LATEST_TAG_NAME }}/go.mod | awk '/^go / {print $2; exit}')
+          if [ -n "$GO_VERSION" ]; then
+            echo "Syncing Go version to $GO_VERSION"
+            go mod edit -go=$GO_VERSION
+          else
+            echo "Failed to detect Go version from upstream go.mod"
+          fi
+
           # Lock gvisor version to a specific revision
           go mod edit -replace=gvisor.dev/gvisor=gvisor.dev/gvisor@v0.0.0-20250606001031-fa4c4dd86b43
           
