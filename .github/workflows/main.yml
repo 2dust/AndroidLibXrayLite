@@ -18,7 +18,7 @@ jobs:
     steps:
 
     - name: Checkout repository
-      uses: actions/checkout@V6
+      uses: actions/checkout@v6.0.0
       
     - name: Setup Golang
       uses: actions/setup-go@v6.1.0
