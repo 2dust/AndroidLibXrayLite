@@ -18,10 +18,10 @@ jobs:
     steps:
 
     - name: Checkout repository
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6.0.0
       
     - name: Setup Golang
-      uses: actions/setup-go@v5.4.0
+      uses: actions/setup-go@v6.1.0
       with:
         go-version-file: 'go.mod'
 
@@ -51,11 +51,11 @@ jobs:
          cp -v data/*.dat assets/
          gomobile init
          go mod tidy
-         gomobile bind -v -androidapi 21 -trimpath -ldflags='-s -w -buildid=' ./
+         gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid=' ./
  
     - name: Upload build artifacts
       if: github.event.inputs.release_tag == ''
-      uses: actions/upload-artifact@v4.6.2
+      uses: actions/upload-artifact@v6.0.0
       with:
         name: libv2ray
         path: |
