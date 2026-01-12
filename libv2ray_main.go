@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ const (
 	coreAsset   = "xray.location.asset"
 	coreCert    = "xray.location.cert"
 	xudpBaseKey = "xray.xudp.basekey"
+	tunFdKey    = "xray.tun.fd"
 )
 
 // CoreController represents a controller for managing Xray core instance lifecycle
@@ -108,7 +110,10 @@ func NewCoreController(s CoreCallbackHandler) *CoreController {
 // StartLoop initializes and starts the core processing loop
 // Thread-safe method that configures and runs the Xray core with the provided configuration
 // Returns immediately if the core is already running
-func (x *CoreController) StartLoop(configContent string) (err error) {
+func (x *CoreController) StartLoop(configContent string, tunFd int32) (err error) {
+	// Set TUN fd key, 0 means do not use TUN
+	setEnvVariable(tunFdKey, strconv.Itoa(int(tunFd)))
+
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
