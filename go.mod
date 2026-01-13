@@ -51,5 +51,3 @@ require (
 	gvisor.dev/gvisor v0.0.0-20251208201337-b42c83311c5b // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 )
-
-replace gvisor.dev/gvisor => gvisor.dev/gvisor v0.0.0-20250606001031-fa4c4dd86b43
