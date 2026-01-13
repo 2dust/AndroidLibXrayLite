@@ -66,15 +66,8 @@ jobs:
             echo "Failed to detect Go version from upstream go.mod"
           fi
 
-          # Lock gvisor version to a specific revision
-          go mod edit -replace=gvisor.dev/gvisor=gvisor.dev/gvisor@v0.0.0-20250606001031-fa4c4dd86b43
-          
-          # Update specific dependency
           go get github.com/xtls/xray-core@${{ env.LATEST_TAG_SHA }}
-
-          # Update all other dependencies
-          go get -u
-          go get gvisor.dev/gvisor@go
+          go get golang.org/x/mobile@latest
           
           # Clean up and verify module dependencies
           go mod tidy -v
