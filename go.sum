@@ -72,8 +72,8 @@ github.com/vishvananda/netns v0.0.5 h1:DfiHV+j8bA32MFM7bfEunvT8IAqQ/NzSJHtcmW5zd
 github.com/vishvananda/netns v0.0.5/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 github.com/xtls/reality v0.0.0-20251116175510-cd53f7d50237 h1:UXjrmniKlY+ZbIqpN91lejB3pszQQQRVu1vqH/p/aGM=
 github.com/xtls/reality v0.0.0-20251116175510-cd53f7d50237/go.mod h1:vbHCV/3VWUvy1oKvTxxWJRPEWSeR1sYgQHIh6u/JiZQ=
-github.com/xtls/xray-core v0.0.0-20260111142645-14e171ac8e87 h1:yGnFrB4462JEOTsrmBANFpdcf6hplizcGv8GM2wvK5Q=
-github.com/xtls/xray-core v0.0.0-20260111142645-14e171ac8e87/go.mod h1:xU3ZJfDUAC32q+zxkLVO3V/7Wt0GvHupfmVRQfZDll0=
+github.com/xtls/xray-core v1.251208.1-0.20260112181802-e742e84ded3e h1:1NBQonD7WV/BMw5C5omeTMRI+9B5/lZnMi8opoGBGDA=
+github.com/xtls/xray-core v1.251208.1-0.20260112181802-e742e84ded3e/go.mod h1:EUeZNN/zljeIJak8SHwDJ6w+94uZYzdlsmwzirlYun0=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
@@ -134,7 +134,7 @@ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C
 gopkg.in/yaml.v3 v3.0.0-20200605160147-a5ece683394c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-gvisor.dev/gvisor v0.0.0-20250606001031-fa4c4dd86b43 h1:BEymU11L8DZSC4GNK48JYIR8EcHs+gFxtg9YfYlp68c=
-gvisor.dev/gvisor v0.0.0-20250606001031-fa4c4dd86b43/go.mod h1:3r5CMtNQMKIvBlrmM9xWUNamjKBYPOWyXOjmg5Kts3g=
+gvisor.dev/gvisor v0.0.0-20260109181451-4be7c433dae2 h1:fr6L00yGG2RP5NMea6njWpdC+bm+cMdFClrSpaicp1c=
+gvisor.dev/gvisor v0.0.0-20260109181451-4be7c433dae2/go.mod h1:QkHjoMIBaYtpVufgwv3keYAbln78mBoCuShZrPrer1Q=
 lukechampine.com/blake3 v1.4.1 h1:I3Smz7gso8w4/TunLKec6K2fn+kyKtDxr/xcQEN84Wg=
 lukechampine.com/blake3 v1.4.1/go.mod h1:QFosUxmjB8mnrWFSNwKmvxHpfY72bmD2tQ0kBMM3kwo=
