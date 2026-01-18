@@ -1,9 +1,9 @@
 module github.com/2dust/AndroidLibXrayLite
 
-go 1.25.5
+go 1.25.6
 
 require (
-	github.com/xtls/xray-core v1.260113.0
+	github.com/xtls/xray-core v1.260118.0
 	golang.org/x/mobile v0.0.0-20260112195712-5b9ecdfb8721
 )
 
@@ -22,7 +22,7 @@ require (
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pires/go-proxyproto v0.8.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/refraction-networking/utls v1.8.1 // indirect
+	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/sagernet/sing v0.7.13 // indirect
