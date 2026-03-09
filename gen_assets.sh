@@ -26,6 +26,9 @@ download_dat() {
 
     echo "Downloading geosite.dat..."
     curl -sL https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat -o "$DATADIR/geosite.dat"
+
+    echo "Downloading geoip-only-cn-private.dat..."
+    curl -sL https://raw.githubusercontent.com/Loyalsoldier/geoip/release/geoip-only-cn-private.dat -o "$DATADIR/geoip-only-cn-private.dat"
 }
 
 # Main execution logic
