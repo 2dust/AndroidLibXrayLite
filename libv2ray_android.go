@@ -1,10 +1,7 @@
-//go:build android
-
 package libv2ray
 
 import (
 	"fmt"
-
 	corenet "github.com/xtls/xray-core/common/net"
 )
 
@@ -27,7 +24,7 @@ type ProcessFinder interface {
 // enabling per-app routing based on UID. Must be called before starting the
 // core for process-based routing rules to work.
 // Pass nil to unregister a previously registered finder.
-func RegisterProcessFinder(finder ProcessFinder) {
+func (x *CoreController) RegisterProcessFinder(finder ProcessFinder) {
 	if finder == nil {
 		corenet.RegisterAndroidProcessFinder(nil)
 		return
