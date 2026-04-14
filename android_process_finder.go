@@ -33,8 +33,13 @@ func RegisterProcessFinder(finder ProcessFinder) {
 		return
 	}
 
-	corenet.RegisterAndroidProcessFinder(func(network, srcIP string, srcPort uint16, destIP string, destPort uint16) (int, string, string, error) {
-		uid := finder.FindProcessByConnection(network, srcIP, int(srcPort), destIP, int(destPort))
+	corenet.RegisterAndroidProcessFinder(func(network, srcIP string, srcPort uint16, destIP string, destPort uint16) (uid int, name string, path string, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				uid, name, path, err = 0, "", "", fmt.Errorf("process finder panic: %v", r)
+			}
+		}()
+		uid = finder.FindProcessByConnection(network, srcIP, int(srcPort), destIP, int(destPort))
 		if uid < 0 {
 			return 0, "", "", fmt.Errorf("process not found for %s %s:%d -> %s:%d", network, srcIP, srcPort, destIP, destPort)
 		}
