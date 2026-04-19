@@ -2,6 +2,7 @@ package libv2ray
 
 import (
 	"fmt"
+
 	corenet "github.com/xtls/xray-core/common/net"
 )
 
@@ -31,8 +32,8 @@ func (x *CoreController) RegisterProcessFinder(finder ProcessFinder) {
 	}
 
 	corenet.RegisterAndroidProcessFinder(func(network, srcIP string, srcPort uint16, destIP string, destPort uint16) (uid int, name string, path string, err error) {
-		// getConnectionOwnerUid only works for established connections, 
-		// so if dest is missing, it likely means the connection is not fully established yet. 
+		// getConnectionOwnerUid only works for established connections,
+		// so if dest is missing, it likely means the connection is not fully established yet.
 		// In that case, we can return an error to indicate that the process cannot be determined at this time.
 		if destPort == 0 || destIP == "" {
 			return 0, "", "", fmt.Errorf("processFinder, no dest for %s %s:%d", network, srcIP, srcPort)
@@ -44,9 +45,9 @@ func (x *CoreController) RegisterProcessFinder(finder ProcessFinder) {
 			}
 		}()
 		uid = finder.FindProcessByConnection(network, srcIP, int(srcPort), destIP, int(destPort))
-		if uid < 0 {
-			return 0, "", "", fmt.Errorf("processFinder, not found for %s %s:%d -> %s:%d", network, srcIP, srcPort, destIP, destPort)
-		}
+		// if uid < 0 {
+		// 	return 0, "", "", fmt.Errorf("processFinder, not found for %s %s:%d -> %s:%d", network, srcIP, srcPort, destIP, destPort)
+		// }
 		return uid, fmt.Sprintf("%d", uid), "", nil
 	})
 }
