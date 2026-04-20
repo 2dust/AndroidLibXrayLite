@@ -21,6 +21,7 @@ import (
 	corefilesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	browser_dialer "github.com/xtls/xray-core/transport/internet/browser_dialer"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -33,6 +34,7 @@ const (
 	coreCert    = "xray.location.cert"
 	xudpBaseKey = "xray.xudp.basekey"
 	tunFdKey    = "xray.tun.fd"
+	browserDialerAddress = "xray.browser.dialer"
 )
 
 // CoreController represents a controller for managing Xray core instance lifecycle
@@ -110,9 +112,15 @@ func NewCoreController(s CoreCallbackHandler) *CoreController {
 // StartLoop initializes and starts the core processing loop
 // Thread-safe method that configures and runs the Xray core with the provided configuration
 // Returns immediately if the core is already running
-func (x *CoreController) StartLoop(configContent string, tunFd int32) (err error) {
+func (x *CoreController) StartLoop(configContent string, tunFd int32, dialerAddr string) (err error) {
 	// Set TUN fd key, 0 means do not use TUN
 	setEnvVariable(tunFdKey, strconv.Itoa(int(tunFd)))
+
+	// Set the Address to bind Browser Dialer, empty means disabled
+	setEnvVariable(browserDialerAddress, dialerAddr)
+
+	// If browserDialerAddress is empty, it'll close the connection.
+	browser_dialer.Reload()
 
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
