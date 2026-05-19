@@ -154,6 +154,40 @@ func (x *CoreController) QueryStats(tag string, direct string) int64 {
 	return counter.Set(0)
 }
 
+// QueryAllOutboundTrafficStats retrieves and resets all outbound traffic counters.
+// Returns a single-line text in format: tag,direction,value;tag,direction,value;
+// Returns an empty string if the stats manager is not initialized or no counters exist.
+func (x *CoreController) QueryAllOutboundTrafficStats() string {
+	if x.statsManager == nil {
+		return ""
+	}
+
+	var b strings.Builder
+
+	x.statsManager.VisitCounters(func(name string, counter corestats.Counter) bool {
+		parts := strings.Split(name, ">>>")
+		if len(parts) != 4 || parts[0] != "outbound" || parts[2] != "traffic" {
+			return true
+		}
+
+		tag := parts[1]
+		direct := parts[3]
+		value := counter.Set(0)
+		if value <= 0 {
+			return true // Skip counters with non-positive values
+		}
+
+		b.WriteString(tag)
+		b.WriteByte(',')
+		b.WriteString(direct)
+		b.WriteByte(',')
+		b.WriteString(strconv.FormatInt(value, 10))
+		b.WriteByte(';')
+		return true
+	})
+	return b.String()
+}
+
 // MeasureDelay measures network latency to a specified URL through the current core instance
 // Uses a 12-second timeout context and returns the round-trip time in milliseconds
 // An error is returned if the connection fails or returns an unexpected status
@@ -197,7 +231,7 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 // CheckVersionX returns the library and Xray versions
 func CheckVersionX() string {
-	var version = 36
+	var version = 37
 	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, core.Version())
 }
 
