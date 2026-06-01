@@ -13,19 +13,16 @@ on:
     branches:
       - main
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
 
     - name: Checkout repository
-      uses: actions/checkout@v6.0.0
+      uses: actions/checkout@v6
       
     - name: Setup Golang
-      uses: actions/setup-go@v6.1.0
+      uses: actions/setup-go@v6
       with:
         go-version-file: 'go.mod'
 
@@ -55,11 +52,11 @@ jobs:
          cp -v data/*.dat assets/
          gomobile init
          go mod tidy
-         gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid=' ./
+         gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
  
     - name: Upload build artifacts
       if: github.event.inputs.release_tag == ''
-      uses: actions/upload-artifact@v6.0.0
+      uses: actions/upload-artifact@v7
       with:
         name: libv2ray
         path: |
