@@ -32,11 +32,11 @@ jobs:
         export PATH=$PATH:~/go/bin
         
     - name: Setup Android SDK
-      uses: android-actions/setup-android@v3.2.0
+      uses: android-actions/setup-android@v4
       with:
         log-accepted-android-sdk-licenses: false
-        cmdline-tools-version: '12266719'
-        packages: 'platforms;android-35 build-tools;35.0.0 platform-tools'
+        cmdline-tools-version: '14742923'
+        packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
 
     - name: Install NDK
       run: |
