@@ -1,0 +1,105 @@
+name: Build LTS
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Xray-core version, e.g. 25.6.1 or v25.6.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Normalize release tag
+        run: |
+          INPUT_TAG="${{ github.event.inputs.release_tag }}"
+
+          if [[ "$INPUT_TAG" == v* ]]; then
+            RELEASE_TAG="$INPUT_TAG"
+          else
+            RELEASE_TAG="v$INPUT_TAG"
+          fi
+
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "Normalized release tag: $RELEASE_TAG"
+
+      - name: Clone Xray-core source
+        run: |
+          git clone --depth 1 --branch "$RELEASE_TAG" https://github.com/autorepobot/Xray-core.git xray-core-src
+
+          LATEST_TAG_SHA=$(git -C xray-core-src rev-parse HEAD)
+          echo "XRAY_CORE_SHA=$LATEST_TAG_SHA" >> $GITHUB_ENV
+          echo "Xray-core SHA: $LATEST_TAG_SHA"
+
+      - name: Setup Golang
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - name: Update xray-core dependency
+        run: |
+          GO_VERSION=$(awk '/^go / {print $2; exit}' xray-core-src/go.mod)
+
+          if [ -n "$GO_VERSION" ]; then
+            echo "Syncing Go version to $GO_VERSION"
+            go mod edit -go="$GO_VERSION"
+          fi
+
+          go mod edit -replace=github.com/xtls/xray-core=./xray-core-src
+          go get golang.org/x/mobile@latest
+          go mod tidy -v
+
+          git diff
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
+          cmdline-tools-version: '14742923'
+          packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
+
+      - name: Install NDK
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            --channel=0 \
+            --install "ndk;29.0.14206865"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
+
+      - name: Build
+        run: |
+          mkdir -p assets data
+          bash gen_assets.sh download
+          cp -v data/*.dat assets/
+          gomobile init
+          gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: libv2ray-${{ env.RELEASE_TAG }}
+          path: |
+            ${{ github.workspace }}/libv2ray*r
+
+      - name: Upload AndroidLibXrayLite to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./libv2ray*r
+          tag: ${{ env.RELEASE_TAG }}
+          file_glob: true
