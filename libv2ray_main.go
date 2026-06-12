@@ -35,6 +35,7 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
+	libVersion           = 38 // Library version, update here only
 )
 
 // CoreController represents a controller for managing Xray core instance lifecycle
@@ -231,8 +232,7 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 // CheckVersionX returns the library and Xray versions
 func CheckVersionX() string {
-	var version = 37
-	return fmt.Sprintf("Lib v%d, Xray-core v%s", version, core.Version())
+	return fmt.Sprintf("Lib v%d, Xray-core v%s", libVersion, core.Version())
 }
 
 // ReconcileBrowserDialer updates the browser dialer address and reloads its configuration
