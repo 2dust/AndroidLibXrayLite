@@ -21,6 +21,11 @@ check_dependencies() {
 
 # Download data function
 download_dat() {
+    if [[ ! -d "$DATADIR" ]]; then
+        echo "Downloading failed \"$DATADIR\" does not exists"
+        exit 1
+    fi
+
     echo "Downloading geoip.dat..."
     curl -sL https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat -o "$DATADIR/geoip.dat"
 
