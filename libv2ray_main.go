@@ -16,13 +16,13 @@ import (
 	"time"
 
 	coreapplog "github.com/xtls/xray-core/app/log"
+	"github.com/xtls/xray-core/common/cmdarg"
 	corecommlog "github.com/xtls/xray-core/common/log"
 	corenet "github.com/xtls/xray-core/common/net"
 	corefilesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
 	corestats "github.com/xtls/xray-core/features/stats"
-	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	browser_dialer "github.com/xtls/xray-core/transport/internet/browser_dialer"
 	mobasset "golang.org/x/mobile/asset"
@@ -201,7 +201,7 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
-	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
+	config, err := core.LoadConfig("json", configInputFromContent(ConfigureFileContent))
 	if err != nil {
 		return -1, fmt.Errorf("config load error: %w", err)
 	}
@@ -257,7 +257,7 @@ func (x *CoreController) doShutdown() {
 // doStartLoop sets up and starts the Xray core
 func (x *CoreController) doStartLoop(configContent string) error {
 	log.Println("initializing core...")
-	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+	config, err := core.LoadConfig("json", configInputFromContent(configContent))
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
@@ -387,4 +387,17 @@ func createStdoutLogWriter() corecommlog.WriterCreator {
 			logger: log.New(os.Stdout, "", 0),
 		}
 	}
+}
+
+func configInputFromContent(configContent string) any {
+	if strings.HasPrefix(configContent, "http") {
+		arg := make(cmdarg.Arg, 0)
+		for _, v := range strings.Split(configContent, "\n") {
+			_ = arg.Set(strings.TrimSpace(v))
+		}
+
+		return arg
+	}
+
+	return strings.NewReader(configContent)
 }
