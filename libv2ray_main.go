@@ -35,7 +35,7 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 38 // Library version, update here only
+	libVersion           = 39 // Library version, update here only
 )
 
 // CoreController represents a controller for managing Xray core instance lifecycle
@@ -44,6 +44,7 @@ type CoreController struct {
 	statsManager    corestats.Manager
 	coreMutex       sync.Mutex
 	coreInstance    *core.Instance
+	configContent   string
 	IsRunning       bool
 }
 
@@ -125,7 +126,11 @@ func (x *CoreController) StartLoop(configContent string, tunFd int32) (err error
 		return nil
 	}
 
-	return x.doStartLoop(configContent)
+	if err := x.doStartLoop(configContent); err != nil {
+		return err
+	}
+	x.configContent = configContent
+	return nil
 }
 
 // StopLoop safely stops the core processing loop and releases resources
@@ -136,8 +141,37 @@ func (x *CoreController) StopLoop() error {
 
 	if x.IsRunning {
 		x.doShutdown()
+		x.configContent = ""
 		x.CallbackHandler.OnEmitStatus(0, "Core stopped")
 	}
+	return nil
+}
+
+// ResetNetworkState recreates the running Xray instance while keeping the
+// Android-owned TUN file descriptor open. Recreating the instance closes
+// network-bound TCP, UDP, mux and transport-pool state so new connections are
+// established on the current Android underlay after Wi-Fi/cellular changes.
+func (x *CoreController) ResetNetworkState() error {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if !x.IsRunning {
+		return nil
+	}
+	if x.configContent == "" {
+		return errors.New("running core configuration is unavailable")
+	}
+
+	configContent := x.configContent
+	log.Println("resetting core network state...")
+	x.doShutdown()
+	if err := x.doStartLoop(configContent); err != nil {
+		x.CallbackHandler.OnEmitStatus(1, "Core network state reset failed: "+err.Error())
+		return fmt.Errorf("core network state reset failed: %w", err)
+	}
+
+	x.CallbackHandler.OnEmitStatus(0, "Core network state reset")
+	log.Println("Core network state reset successfully")
 	return nil
 }
 
@@ -262,18 +296,20 @@ func (x *CoreController) doStartLoop(configContent string) error {
 		return fmt.Errorf("config error: %w", err)
 	}
 
-	x.coreInstance, err = core.New(config)
+	instance, err := core.New(config)
 	if err != nil {
 		return fmt.Errorf("core init failed: %w", err)
 	}
-	x.statsManager = x.coreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
 
 	log.Println("starting core...")
-	x.IsRunning = true
-	if err := x.coreInstance.Start(); err != nil {
-		x.IsRunning = false
+	if err := instance.Start(); err != nil {
+		_ = instance.Close()
 		return fmt.Errorf("startup failed: %w", err)
 	}
+
+	x.coreInstance = instance
+	x.statsManager = instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	x.IsRunning = true
 
 	x.CallbackHandler.Startup()
 	x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
