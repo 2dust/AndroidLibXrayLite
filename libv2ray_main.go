@@ -185,6 +185,13 @@ func (x *CoreController) ResetNetworkStateWithWarmRoute(balancerTag, target stri
 }
 
 func (x *CoreController) resetNetworkState(balancerTag, target string) error {
+	return x.resetNetworkStateWithStarter(balancerTag, target, x.doStartLoop)
+}
+
+func (x *CoreController) resetNetworkStateWithStarter(
+	balancerTag, target string,
+	startLoop func(string, string, string) error,
+) error {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
@@ -198,9 +205,25 @@ func (x *CoreController) resetNetworkState(balancerTag, target string) error {
 	configContent := x.configContent
 	log.Println("resetting core network state...")
 	x.doShutdown()
-	if err := x.doStartLoop(configContent, balancerTag, target); err != nil {
-		x.CallbackHandler.OnEmitStatus(1, "Core network state reset failed: "+err.Error())
-		return fmt.Errorf("core network state reset failed: %w", err)
+	if resetErr := startLoop(configContent, balancerTag, target); resetErr != nil {
+		log.Printf("core network state reset failed, retrying original configuration: %v", resetErr)
+		if rollbackErr := startLoop(configContent, "", ""); rollbackErr != nil {
+			message := fmt.Sprintf(
+				"Core network state reset failed: %v; original configuration recovery failed: %v",
+				resetErr,
+				rollbackErr,
+			)
+			x.CallbackHandler.OnEmitStatus(1, message)
+			return fmt.Errorf(
+				"core network state reset failed: %w; original configuration recovery failed: %v",
+				resetErr,
+				rollbackErr,
+			)
+		}
+
+		x.CallbackHandler.OnEmitStatus(0, "Core network state reset recovered using the original configuration")
+		log.Println("Core network state reset recovered using the original configuration")
+		return nil
 	}
 
 	x.CallbackHandler.OnEmitStatus(0, "Core network state reset")

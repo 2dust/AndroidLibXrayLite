@@ -2,7 +2,9 @@ package libv2ray
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,88 @@ import (
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
 )
+
+type resetTestCallback struct {
+	statuses []string
+}
+
+func (*resetTestCallback) Startup() int { return 0 }
+func (*resetTestCallback) Shutdown() int { return 0 }
+func (c *resetTestCallback) OnEmitStatus(_ int, status string) int {
+	c.statuses = append(c.statuses, status)
+	return 0
+}
+func (*resetTestCallback) OnBalancerTargetChanged(string, string) int { return 0 }
+
+func TestResetNetworkStateRecoversOriginalConfiguration(t *testing.T) {
+	callback := &resetTestCallback{}
+	controller := &CoreController{
+		CallbackHandler: callback,
+		configContent:   "config",
+		IsRunning:       true,
+	}
+
+	type attempt struct {
+		config      string
+		balancerTag string
+		target      string
+	}
+	var attempts []attempt
+	err := controller.resetNetworkStateWithStarter("balancer", "cached-target", func(config, balancerTag, target string) error {
+		attempts = append(attempts, attempt{config, balancerTag, target})
+		if len(attempts) == 1 {
+			return errors.New("replacement failed")
+		}
+		controller.IsRunning = true
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !controller.IsRunning {
+		t.Fatal("controller was not running after original configuration recovery")
+	}
+	wantAttempts := []attempt{
+		{config: "config", balancerTag: "balancer", target: "cached-target"},
+		{config: "config"},
+	}
+	if !reflect.DeepEqual(attempts, wantAttempts) {
+		t.Fatalf("attempts = %#v, want %#v", attempts, wantAttempts)
+	}
+	if len(callback.statuses) != 1 || !strings.Contains(callback.statuses[0], "recovered") {
+		t.Fatalf("statuses = %q, want one recovery status", callback.statuses)
+	}
+}
+
+func TestResetNetworkStateReportsFailedRecovery(t *testing.T) {
+	callback := &resetTestCallback{}
+	controller := &CoreController{
+		CallbackHandler: callback,
+		configContent:   "config",
+		IsRunning:       true,
+	}
+
+	attempts := 0
+	err := controller.resetNetworkStateWithStarter("balancer", "cached-target", func(string, string, string) error {
+		attempts++
+		return errors.New("startup failed")
+	})
+	if err == nil {
+		t.Fatal("expected reset and recovery failure")
+	}
+	if attempts != 2 {
+		t.Fatalf("startup attempts = %d, want 2", attempts)
+	}
+	if controller.IsRunning {
+		t.Fatal("controller unexpectedly remained running after both startup attempts failed")
+	}
+	if !strings.Contains(err.Error(), "original configuration recovery failed") {
+		t.Fatalf("error = %q, want recovery failure detail", err)
+	}
+	if len(callback.statuses) != 1 || !strings.Contains(callback.statuses[0], "recovery failed") {
+		t.Fatalf("statuses = %q, want one failed recovery status", callback.statuses)
+	}
+}
 
 func TestRoutedBalancerSelectors(t *testing.T) {
 	routerConfig := &corerouter.Config{
