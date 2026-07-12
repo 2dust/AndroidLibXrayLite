@@ -1,8 +1,10 @@
 package libv2ray
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	coreobservatory "github.com/xtls/xray-core/app/observatory"
 	corerouter "github.com/xtls/xray-core/app/router"
@@ -18,6 +20,7 @@ func TestRoutedBalancerSelectors(t *testing.T) {
 		BalancingRule: []*corerouter.BalancingRule{{
 			Tag:              "balancer-main",
 			OutboundSelector: []string{"proxy-policy-"},
+			Strategy:         "leastPing",
 		}},
 	}
 	config := &core.Config{App: []*serial.TypedMessage{
@@ -31,6 +34,38 @@ func TestRoutedBalancerSelectors(t *testing.T) {
 	}
 	if want := []string{"proxy-policy-"}; !reflect.DeepEqual(selectors, want) {
 		t.Fatalf("selectors = %v, want %v", selectors, want)
+	}
+	plan, err := routedBalancerPlanForConfig(config)
+	if err != nil {
+		t.Fatalf("routedBalancerPlanForConfig returned an error: %v", err)
+	}
+	if plan.tag != "balancer-main" {
+		t.Fatalf("balancer tag = %q, want balancer-main", plan.tag)
+	}
+}
+
+func TestRoutedBalancerPlanIgnoresNonObservableStrategy(t *testing.T) {
+	routerConfig := &corerouter.Config{
+		Rule: []*corerouter.RoutingRule{{
+			TargetTag: &corerouter.RoutingRule_BalancingTag{BalancingTag: "balancer-main"},
+		}},
+		BalancingRule: []*corerouter.BalancingRule{{
+			Tag:              "balancer-main",
+			OutboundSelector: []string{"proxy-policy-"},
+			Strategy:         "random",
+		}},
+	}
+	config := &core.Config{App: []*serial.TypedMessage{
+		serial.ToTypedMessage(routerConfig),
+		serial.ToTypedMessage(&coreobservatory.Config{SubjectSelector: []string{"proxy-policy-"}}),
+	}}
+
+	plan, err := routedBalancerPlanForConfig(config)
+	if err != nil {
+		t.Fatalf("routedBalancerPlanForConfig returned an error: %v", err)
+	}
+	if plan.tag != "" || plan.selectors != nil {
+		t.Fatalf("plan = %#v, want empty plan", plan)
 	}
 }
 
@@ -95,5 +130,28 @@ func TestPolicyGroupObservationState(t *testing.T) {
 				t.Fatalf("state = (%v, %v), want (%v, %v)", ready, complete, test.ready, test.complete)
 			}
 		})
+	}
+}
+
+func TestOutboundDelayResultJSON(t *testing.T) {
+	payload, err := json.Marshal(outboundDelayResult{Delay: 42, OutboundTag: "proxy-policy-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(payload), `{"delay":42,"outboundTag":"proxy-policy-a"}`; got != want {
+		t.Fatalf("payload = %s, want %s", got, want)
+	}
+}
+
+func TestObservationResultDeadlineFollowsProbeDeadline(t *testing.T) {
+	got, err := observationResultDeadlineForProbe(30 * time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 32 * time.Second; got != want {
+		t.Fatalf("observation result deadline = %v, want %v", got, want)
+	}
+	if _, err := observationResultDeadlineForProbe(0); err == nil {
+		t.Fatal("expected an error for an invalid probe deadline")
 	}
 }

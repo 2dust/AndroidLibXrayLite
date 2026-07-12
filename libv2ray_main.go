@@ -2,6 +2,7 @@ package libv2ray
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	core "github.com/xtls/xray-core/core"
 	coreextension "github.com/xtls/xray-core/features/extension"
 	coreoutbound "github.com/xtls/xray-core/features/outbound"
+	corerouting "github.com/xtls/xray-core/features/routing"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -39,8 +41,20 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 40 // Library version, update here only
+	libVersion           = 41 // Library version, update here only
 )
+
+const warmRouteDeadlineGrace = 2 * time.Second
+
+type routedBalancerPlan struct {
+	tag       string
+	selectors []string
+}
+
+type outboundDelayResult struct {
+	Delay       int64  `json:"delay"`
+	OutboundTag string `json:"outboundTag,omitempty"`
+}
 
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
@@ -49,6 +63,8 @@ type CoreController struct {
 	coreMutex       sync.Mutex
 	coreInstance    *core.Instance
 	configContent   string
+	stopTargetWatch func()
+	warmRouteTimer  *time.Timer
 	IsRunning       bool
 }
 
@@ -57,6 +73,7 @@ type CoreCallbackHandler interface {
 	Startup() int
 	Shutdown() int
 	OnEmitStatus(int, string) int
+	OnBalancerTargetChanged(string, string) int
 }
 
 // consoleLogWriter implements a log writer without datetime stamps
@@ -130,7 +147,7 @@ func (x *CoreController) StartLoop(configContent string, tunFd int32) (err error
 		return nil
 	}
 
-	if err := x.doStartLoop(configContent); err != nil {
+	if err := x.doStartLoop(configContent, "", ""); err != nil {
 		return err
 	}
 	x.configContent = configContent
@@ -156,6 +173,18 @@ func (x *CoreController) StopLoop() error {
 // network-bound TCP, UDP, mux and transport-pool state so new connections are
 // established on the current Android underlay after Wi-Fi/cellular changes.
 func (x *CoreController) ResetNetworkState() error {
+	return x.resetNetworkState("", "")
+}
+
+// ResetNetworkStateWithWarmRoute recreates the running Xray instance and
+// temporarily pins a previously viable outbound while the new observatory
+// gathers results. The override is removed as soon as the strategy has a
+// fresh target, or after a bounded timeout.
+func (x *CoreController) ResetNetworkStateWithWarmRoute(balancerTag, target string) error {
+	return x.resetNetworkState(balancerTag, target)
+}
+
+func (x *CoreController) resetNetworkState(balancerTag, target string) error {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
@@ -169,7 +198,7 @@ func (x *CoreController) ResetNetworkState() error {
 	configContent := x.configContent
 	log.Println("resetting core network state...")
 	x.doShutdown()
-	if err := x.doStartLoop(configContent); err != nil {
+	if err := x.doStartLoop(configContent, balancerTag, target); err != nil {
 		x.CallbackHandler.OnEmitStatus(1, "Core network state reset failed: "+err.Error())
 		return fmt.Errorf("core network state reset failed: %w", err)
 	}
@@ -177,6 +206,19 @@ func (x *CoreController) ResetNetworkState() error {
 	x.CallbackHandler.OnEmitStatus(0, "Core network state reset")
 	log.Println("Core network state reset successfully")
 	return nil
+}
+
+// GetBalancerPrincipleTarget returns the strategy's current first-choice
+// outbound. An empty result means the observatory has not produced a viable
+// target yet or the running profile has no compatible balancer.
+func (x *CoreController) GetBalancerPrincipleTarget(balancerTag string) (string, error) {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if !x.IsRunning || x.coreInstance == nil {
+		return "", nil
+	}
+	return firstBalancerPrincipleTarget(x.coreInstance, balancerTag)
 }
 
 // QueryStats retrieves and resets traffic statistics for a specific outbound tag and direction
@@ -239,13 +281,34 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
+	result, err := measureOutboundDelay(ConfigureFileContent, url, "")
+	return result.Delay, err
+}
+
+// MeasureOutboundDelayWithWarmRoute measures a temporary policy-group core
+// through a previously viable outbound when one is available. The JSON result
+// includes the outbound that succeeded so the caller can refresh its cache.
+func MeasureOutboundDelayWithWarmRoute(ConfigureFileContent, url, warmTarget string) (string, error) {
+	result, err := measureOutboundDelay(ConfigureFileContent, url, warmTarget)
+	if err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("delay result encoding failed: %w", err)
+	}
+	return string(payload), nil
+}
+
+func measureOutboundDelay(ConfigureFileContent, url, warmTarget string) (outboundDelayResult, error) {
+	failure := outboundDelayResult{Delay: -1}
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
 	if err != nil {
-		return -1, fmt.Errorf("config load error: %w", err)
+		return failure, fmt.Errorf("config load error: %w", err)
 	}
-	balancerSelectors, err := routedBalancerSelectors(config)
+	plan, err := routedBalancerPlanForConfig(config)
 	if err != nil {
-		return -1, fmt.Errorf("speed-test route inspection failed: %w", err)
+		return failure, fmt.Errorf("speed-test route inspection failed: %w", err)
 	}
 
 	// Simplify config for testing
@@ -265,17 +328,47 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 
 	inst, err := core.New(config)
 	if err != nil {
-		return -1, fmt.Errorf("instance creation failed: %w", err)
+		return failure, fmt.Errorf("instance creation failed: %w", err)
 	}
 
 	if err := inst.Start(); err != nil {
-		return -1, fmt.Errorf("startup failed: %w", err)
+		return failure, fmt.Errorf("startup failed: %w", err)
 	}
 	defer inst.Close()
-	if err := waitForObservatoryReady(inst, balancerSelectors, 12*time.Second); err != nil {
-		return -1, err
+
+	if warmTarget != "" && plan.tag != "" {
+		if err := setBalancerOverride(inst, plan.tag, warmTarget); err == nil {
+			log.Printf("testing policy group through warm route %q", warmTarget)
+			delay, warmErr := measureInstDelayWithOptions(context.Background(), inst, url, 4*time.Second, 1)
+			_ = clearBalancerOverride(inst, plan.tag)
+			if warmErr == nil {
+				// The override is the route that actually completed this request.
+				// The observatory may still be cold here, so its current principle
+				// target is not yet evidence that another route is viable.
+				return outboundDelayResult{Delay: delay, OutboundTag: warmTarget}, nil
+			}
+			log.Printf("warm route %q failed, waiting for fresh observatory result: %v", warmTarget, warmErr)
+		} else {
+			log.Printf("cached warm route %q is not usable by this policy group: %v", warmTarget, err)
+		}
 	}
-	return measureInstDelay(context.Background(), inst, url)
+
+	readinessDeadline := time.Duration(0)
+	if len(plan.selectors) > 0 {
+		readinessDeadline, err = observationResultDeadline(inst)
+		if err != nil {
+			return failure, fmt.Errorf("observatory deadline unavailable: %w", err)
+		}
+	}
+	if err := waitForObservatoryReady(inst, plan.selectors, readinessDeadline); err != nil {
+		return failure, err
+	}
+	delay, err := measureInstDelay(context.Background(), inst, url)
+	if err != nil {
+		return failure, err
+	}
+	target, _ := firstBalancerPrincipleTarget(inst, plan.tag)
+	return outboundDelayResult{Delay: delay, OutboundTag: target}, nil
 }
 
 // routedBalancerSelectors returns the selectors used by the first routed
@@ -283,6 +376,11 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 // these selectors identify the policy-group members that must be observed
 // before the measured request is dispatched.
 func routedBalancerSelectors(config *core.Config) ([]string, error) {
+	plan, err := routedBalancerPlanForConfig(config)
+	return plan.selectors, err
+}
+
+func routedBalancerPlanForConfig(config *core.Config) (routedBalancerPlan, error) {
 	hasObservatory := false
 	for _, app := range config.App {
 		if app.Type == "xray.core.app.observatory.Config" ||
@@ -292,7 +390,7 @@ func routedBalancerSelectors(config *core.Config) ([]string, error) {
 		}
 	}
 	if !hasObservatory {
-		return nil, nil
+		return routedBalancerPlan{}, nil
 	}
 
 	for _, app := range config.App {
@@ -301,11 +399,11 @@ func routedBalancerSelectors(config *core.Config) ([]string, error) {
 		}
 		instance, err := app.GetInstance()
 		if err != nil {
-			return nil, err
+			return routedBalancerPlan{}, err
 		}
 		routerConfig, ok := instance.(*corerouter.Config)
 		if !ok {
-			return nil, errors.New("unexpected router config type")
+			return routedBalancerPlan{}, errors.New("unexpected router config type")
 		}
 		for _, rule := range routerConfig.GetRule() {
 			balancerTag := rule.GetBalancingTag()
@@ -314,13 +412,20 @@ func routedBalancerSelectors(config *core.Config) ([]string, error) {
 			}
 			for _, balancer := range routerConfig.GetBalancingRule() {
 				if balancer.GetTag() == balancerTag {
-					return append([]string(nil), balancer.GetOutboundSelector()...), nil
+					strategy := balancer.GetStrategy()
+					if strategy != "leastPing" && strategy != "leastLoad" {
+						return routedBalancerPlan{}, nil
+					}
+					return routedBalancerPlan{
+						tag:       balancerTag,
+						selectors: append([]string(nil), balancer.GetOutboundSelector()...),
+					}, nil
 				}
 			}
-			return nil, fmt.Errorf("routed balancer %q is not configured", balancerTag)
+			return routedBalancerPlan{}, fmt.Errorf("routed balancer %q is not configured", balancerTag)
 		}
 	}
-	return nil, nil
+	return routedBalancerPlan{}, nil
 }
 
 // waitForObservatoryReady prevents a policy-group measurement from racing the
@@ -397,6 +502,140 @@ func policyGroupObservationState(result *coreobservatory.ObservationResult, cand
 	return false, len(completed) == len(candidates)
 }
 
+func balancerFeatures(inst *core.Instance) (corerouting.BalancerPrincipleTarget, corerouting.BalancerOverrider, error) {
+	if inst == nil {
+		return nil, nil, errors.New("core instance is nil")
+	}
+	feature := inst.GetFeature(corerouting.RouterType())
+	principle, ok := feature.(corerouting.BalancerPrincipleTarget)
+	if !ok {
+		return nil, nil, errors.New("router does not expose balancer principle targets")
+	}
+	overrider, ok := feature.(corerouting.BalancerOverrider)
+	if !ok {
+		return nil, nil, errors.New("router does not support balancer overrides")
+	}
+	return principle, overrider, nil
+}
+
+func firstBalancerPrincipleTarget(inst *core.Instance, balancerTag string) (string, error) {
+	if balancerTag == "" {
+		return "", nil
+	}
+	principle, _, err := balancerFeatures(inst)
+	if err != nil {
+		return "", err
+	}
+	targets, err := principle.GetPrincipleTarget(balancerTag)
+	if err != nil {
+		return "", err
+	}
+	for _, target := range targets {
+		if target != "" {
+			return target, nil
+		}
+	}
+	return "", nil
+}
+
+func setBalancerOverride(inst *core.Instance, balancerTag, target string) error {
+	if balancerTag == "" || target == "" {
+		return errors.New("balancer tag and target are required")
+	}
+	manager, ok := inst.GetFeature(coreoutbound.ManagerType()).(coreoutbound.Manager)
+	if !ok || manager.GetHandler(target) == nil {
+		return fmt.Errorf("outbound %q is not present", target)
+	}
+	_, overrider, err := balancerFeatures(inst)
+	if err != nil {
+		return err
+	}
+	return overrider.SetOverrideTarget(balancerTag, target)
+}
+
+func clearBalancerOverride(inst *core.Instance, balancerTag string) error {
+	_, overrider, err := balancerFeatures(inst)
+	if err != nil {
+		return err
+	}
+	return overrider.SetOverrideTarget(balancerTag, "")
+}
+
+func getBalancerOverride(inst *core.Instance, balancerTag string) (string, error) {
+	_, overrider, err := balancerFeatures(inst)
+	if err != nil {
+		return "", err
+	}
+	return overrider.GetOverrideTarget(balancerTag)
+}
+
+func observationResultDeadlineForProbe(probeDeadline time.Duration) (time.Duration, error) {
+	if probeDeadline <= 0 {
+		return 0, errors.New("observatory did not report a valid probe deadline")
+	}
+	return probeDeadline + warmRouteDeadlineGrace, nil
+}
+
+func observationResultDeadline(inst *core.Instance) (time.Duration, error) {
+	if inst == nil {
+		return 0, errors.New("core instance is nil")
+	}
+	observer := inst.GetFeature(coreextension.ObservatoryType())
+	deadline, ok := observer.(coreextension.ObservatoryProbeDeadline)
+	if !ok {
+		return 0, errors.New("observatory does not expose its initial probe deadline")
+	}
+	return observationResultDeadlineForProbe(deadline.ObservationProbeDeadline())
+}
+
+func watchBalancerTargetChanges(inst *core.Instance, balancerTag string, handler CoreCallbackHandler) (func(), error) {
+	if balancerTag == "" {
+		return func() {}, nil
+	}
+	observer := inst.GetFeature(coreextension.ObservatoryType())
+	notifier, ok := observer.(coreextension.ObservatoryUpdateNotifier)
+	if !ok {
+		return nil, errors.New("observatory does not publish update notifications")
+	}
+
+	var access sync.Mutex
+	stopped := false
+	lastTarget := ""
+	unsubscribe := notifier.SubscribeObservationUpdates(func() {
+		access.Lock()
+		defer access.Unlock()
+		if stopped {
+			return
+		}
+
+		target, err := firstBalancerPrincipleTarget(inst, balancerTag)
+		if err != nil || target == "" {
+			return
+		}
+		if target == lastTarget {
+			return
+		}
+		lastTarget = target
+
+		if override, err := getBalancerOverride(inst, balancerTag); err == nil && override != "" {
+			if err := clearBalancerOverride(inst, balancerTag); err != nil {
+				log.Printf("failed to release warm route %q: %v", override, err)
+			} else {
+				log.Printf("released warm route %q after fresh observatory result", override)
+			}
+		}
+		if handler != nil {
+			handler.OnBalancerTargetChanged(balancerTag, target)
+		}
+	})
+	return func() {
+		access.Lock()
+		stopped = true
+		unsubscribe()
+		access.Unlock()
+	}, nil
+}
+
 // CheckVersionX returns the library and Xray versions
 func CheckVersionX() string {
 	return fmt.Sprintf("Lib v%d, Xray-core v%s", libVersion, core.Version())
@@ -411,6 +650,14 @@ func ReconcileBrowserDialer(dialerAddr string) {
 
 // doShutdown shuts down the Xray instance and cleans up resources
 func (x *CoreController) doShutdown() {
+	if x.warmRouteTimer != nil {
+		x.warmRouteTimer.Stop()
+		x.warmRouteTimer = nil
+	}
+	if x.stopTargetWatch != nil {
+		x.stopTargetWatch()
+		x.stopTargetWatch = nil
+	}
 	if x.coreInstance != nil {
 		if err := x.coreInstance.Close(); err != nil {
 			log.Printf("core shutdown error: %v", err)
@@ -422,27 +669,65 @@ func (x *CoreController) doShutdown() {
 }
 
 // doStartLoop sets up and starts the Xray core
-func (x *CoreController) doStartLoop(configContent string) error {
+func (x *CoreController) doStartLoop(configContent, warmBalancerTag, warmTarget string) error {
 	log.Println("initializing core...")
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
+	}
+	plan, err := routedBalancerPlanForConfig(config)
+	if err != nil {
+		return fmt.Errorf("route inspection failed: %w", err)
 	}
 
 	instance, err := core.New(config)
 	if err != nil {
 		return fmt.Errorf("core init failed: %w", err)
 	}
+	stopTargetWatch, err := watchBalancerTargetChanges(instance, plan.tag, x.CallbackHandler)
+	if err != nil {
+		_ = instance.Close()
+		return fmt.Errorf("balancer target watch failed: %w", err)
+	}
+	warmRouteApplied := false
+	warmRouteLifetime := time.Duration(0)
+	if warmTarget != "" {
+		warmRouteLifetime, err = observationResultDeadline(instance)
+		if err != nil {
+			log.Printf("warm route %q was not applied: %v", warmTarget, err)
+		} else if err := setBalancerOverride(instance, warmBalancerTag, warmTarget); err != nil {
+			log.Printf("warm route %q was not applied: %v", warmTarget, err)
+		} else {
+			log.Printf("using warm route %q for up to %v while observatory starts", warmTarget, warmRouteLifetime)
+			warmRouteApplied = true
+		}
+	}
 
 	log.Println("starting core...")
 	if err := instance.Start(); err != nil {
+		stopTargetWatch()
 		_ = instance.Close()
 		return fmt.Errorf("startup failed: %w", err)
 	}
 
 	x.coreInstance = instance
+	x.stopTargetWatch = stopTargetWatch
 	x.statsManager = instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
 	x.IsRunning = true
+	if warmRouteApplied {
+		x.warmRouteTimer = time.AfterFunc(warmRouteLifetime, func() {
+			x.coreMutex.Lock()
+			defer x.coreMutex.Unlock()
+			if !x.IsRunning || x.coreInstance != instance {
+				return
+			}
+			override, err := getBalancerOverride(instance, warmBalancerTag)
+			if err == nil && override == warmTarget {
+				_ = clearBalancerOverride(instance, warmBalancerTag)
+				log.Printf("warm route %q expired before observatory selected a fresh target", warmTarget)
+			}
+		})
+	}
 
 	x.CallbackHandler.Startup()
 	x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
@@ -453,6 +738,10 @@ func (x *CoreController) doStartLoop(configContent string) error {
 
 // measureInstDelay measures the delay for an instance to a given URL
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
+	return measureInstDelayWithOptions(ctx, inst, url, 12*time.Second, 2)
+}
+
+func measureInstDelayWithOptions(ctx context.Context, inst *core.Instance, url string, timeout time.Duration, attempts int) (int64, error) {
 	if inst == nil {
 		return -1, errors.New("core instance is nil")
 	}
@@ -471,7 +760,7 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 
 	client := &http.Client{
 		Transport: tr,
-		Timeout:   12 * time.Second,
+		Timeout:   timeout,
 	}
 
 	if url == "" {
@@ -487,8 +776,6 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 	success := false
 	var lastErr error
 
-	// Add exception handling and increase retry attempts
-	const attempts = 2
 	for i := 0; i < attempts; i++ {
 		select {
 		case <-ctx.Done():
