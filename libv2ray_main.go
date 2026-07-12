@@ -16,11 +16,15 @@ import (
 	"time"
 
 	coreapplog "github.com/xtls/xray-core/app/log"
+	coreobservatory "github.com/xtls/xray-core/app/observatory"
+	corerouter "github.com/xtls/xray-core/app/router"
 	corecommlog "github.com/xtls/xray-core/common/log"
 	corenet "github.com/xtls/xray-core/common/net"
 	corefilesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	coreextension "github.com/xtls/xray-core/features/extension"
+	coreoutbound "github.com/xtls/xray-core/features/outbound"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -35,7 +39,7 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 39 // Library version, update here only
+	libVersion           = 40 // Library version, update here only
 )
 
 // CoreController represents a controller for managing Xray core instance lifecycle
@@ -239,6 +243,10 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	if err != nil {
 		return -1, fmt.Errorf("config load error: %w", err)
 	}
+	balancerSelectors, err := routedBalancerSelectors(config)
+	if err != nil {
+		return -1, fmt.Errorf("speed-test route inspection failed: %w", err)
+	}
 
 	// Simplify config for testing
 	config.Inbound = nil
@@ -246,7 +254,10 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	for _, app := range config.App {
 		if app.Type == "xray.app.proxyman.OutboundConfig" ||
 			app.Type == "xray.app.dispatcher.Config" ||
-			app.Type == "xray.app.log.Config" {
+			app.Type == "xray.app.log.Config" ||
+			app.Type == "xray.app.router.Config" ||
+			app.Type == "xray.core.app.observatory.Config" ||
+			app.Type == "xray.core.app.observatory.burst.Config" {
 			essentialApp = append(essentialApp, app)
 		}
 	}
@@ -261,7 +272,129 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 		return -1, fmt.Errorf("startup failed: %w", err)
 	}
 	defer inst.Close()
+	if err := waitForObservatoryReady(inst, balancerSelectors, 12*time.Second); err != nil {
+		return -1, err
+	}
 	return measureInstDelay(context.Background(), inst, url)
+}
+
+// routedBalancerSelectors returns the selectors used by the first routed
+// balancer. Speed-test configurations contain one catch-all balancer rule, so
+// these selectors identify the policy-group members that must be observed
+// before the measured request is dispatched.
+func routedBalancerSelectors(config *core.Config) ([]string, error) {
+	hasObservatory := false
+	for _, app := range config.App {
+		if app.Type == "xray.core.app.observatory.Config" ||
+			app.Type == "xray.core.app.observatory.burst.Config" {
+			hasObservatory = true
+			break
+		}
+	}
+	if !hasObservatory {
+		return nil, nil
+	}
+
+	for _, app := range config.App {
+		if app.Type != "xray.app.router.Config" {
+			continue
+		}
+		instance, err := app.GetInstance()
+		if err != nil {
+			return nil, err
+		}
+		routerConfig, ok := instance.(*corerouter.Config)
+		if !ok {
+			return nil, errors.New("unexpected router config type")
+		}
+		for _, rule := range routerConfig.GetRule() {
+			balancerTag := rule.GetBalancingTag()
+			if balancerTag == "" {
+				continue
+			}
+			for _, balancer := range routerConfig.GetBalancingRule() {
+				if balancer.GetTag() == balancerTag {
+					return append([]string(nil), balancer.GetOutboundSelector()...), nil
+				}
+			}
+			return nil, fmt.Errorf("routed balancer %q is not configured", balancerTag)
+		}
+	}
+	return nil, nil
+}
+
+// waitForObservatoryReady prevents a policy-group measurement from racing the
+// temporary core's initial probes. As soon as one candidate is known alive the
+// balancer can safely dispatch through it. If every candidate has completed
+// and none is alive, fail immediately instead of falling through to a default
+// outbound.
+func waitForObservatoryReady(inst *core.Instance, selectors []string, timeout time.Duration) error {
+	if len(selectors) == 0 {
+		return nil
+	}
+
+	feature := inst.GetFeature(coreextension.ObservatoryType())
+	observer, ok := feature.(coreextension.Observatory)
+	if !ok {
+		return errors.New("policy-group observatory is unavailable")
+	}
+	managerFeature := inst.GetFeature(coreoutbound.ManagerType())
+	manager, ok := managerFeature.(coreoutbound.HandlerSelector)
+	if !ok {
+		return errors.New("outbound manager cannot select policy-group members")
+	}
+	candidates := manager.Select(selectors)
+	if len(candidates) == 0 {
+		return errors.New("policy group has no candidate outbounds")
+	}
+	candidateSet := make(map[string]struct{}, len(candidates))
+	for _, tag := range candidates {
+		candidateSet[tag] = struct{}{}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		observation, err := observer.GetObservation(ctx)
+		if err != nil {
+			return fmt.Errorf("observatory query failed: %w", err)
+		}
+		result, ok := observation.(*coreobservatory.ObservationResult)
+		if !ok {
+			return errors.New("unexpected observatory result type")
+		}
+		ready, complete := policyGroupObservationState(result, candidateSet)
+		if ready {
+			return nil
+		}
+		if complete {
+			return errors.New("policy group has no healthy outbound")
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("policy-group observatory readiness timeout: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func policyGroupObservationState(result *coreobservatory.ObservationResult, candidates map[string]struct{}) (bool, bool) {
+	completed := make(map[string]struct{}, len(candidates))
+	for _, status := range result.GetStatus() {
+		tag := status.GetOutboundTag()
+		if _, expected := candidates[tag]; !expected {
+			continue
+		}
+		completed[tag] = struct{}{}
+		if status.GetAlive() {
+			return true, len(completed) == len(candidates)
+		}
+	}
+	return false, len(completed) == len(candidates)
 }
 
 // CheckVersionX returns the library and Xray versions
