@@ -52,14 +52,10 @@ type routedBalancerPlan struct {
 	selectors []string
 }
 
-type outboundDelayResult struct {
-	Delay       int64  `json:"delay"`
-	OutboundTag string `json:"outboundTag,omitempty"`
-}
-
 // OutboundProbeHandler receives coalesced JSON snapshots while a one-shot
 // outbound probe batch is running. Callbacks are serialized and may contain
 // more than one newly completed outbound when native updates were coalesced.
+// These snapshots are non-terminal; the method return carries the final state.
 type OutboundProbeHandler interface {
 	OnOutboundProbeUpdate(string) int
 }
@@ -360,23 +356,47 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
-	result, err := measureOutboundDelay(ConfigureFileContent, url, "")
-	return result.Delay, err
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
+	if err != nil {
+		return -1, fmt.Errorf("config load error: %w", err)
+	}
+
+	// Preserve the established lightweight single-outbound measurement API for
+	// existing embedders. Policy-group batch probing uses ProbeOutbounds instead.
+	config.Inbound = nil
+	var essentialApp []*serial.TypedMessage
+	for _, app := range config.App {
+		if app.Type == "xray.app.proxyman.OutboundConfig" ||
+			app.Type == "xray.app.dispatcher.Config" ||
+			app.Type == "xray.app.log.Config" {
+			essentialApp = append(essentialApp, app)
+		}
+	}
+	config.App = essentialApp
+
+	inst, err := core.New(config)
+	if err != nil {
+		return -1, fmt.Errorf("instance creation failed: %w", err)
+	}
+	if err := inst.Start(); err != nil {
+		return -1, fmt.Errorf("startup failed: %w", err)
+	}
+	defer inst.Close()
+	return measureInstDelay(context.Background(), inst, url)
 }
 
-// MeasureOutboundDelayWithWarmRoute measures a temporary policy-group core
-// through a previously viable outbound when one is available. The JSON result
-// includes the outbound that succeeded so the caller can refresh its cache.
-func MeasureOutboundDelayWithWarmRoute(ConfigureFileContent, url, warmTarget string) (string, error) {
-	result, err := measureOutboundDelay(ConfigureFileContent, url, warmTarget)
+// ValidateOutboundProbeConfig parses one source configuration without creating
+// an Xray instance. Batch builders can use this to reject one malformed source
+// before combining it with otherwise viable profiles.
+func ValidateOutboundProbeConfig(configContent string) error {
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
-		return "", err
+		return fmt.Errorf("outbound probe config load failed: %w", err)
 	}
-	payload, err := json.Marshal(result)
-	if err != nil {
-		return "", fmt.Errorf("delay result encoding failed: %w", err)
+	if len(config.Outbound) == 0 {
+		return errors.New("outbound probe config has no outbounds")
 	}
-	return string(payload), nil
+	return nil
 }
 
 // ProbeOutbounds runs a finite, concurrent outbound probe batch through one
@@ -424,18 +444,10 @@ func (c *OutboundProbeController) ProbeOutbounds(
 	if err != nil {
 		return "", fmt.Errorf("outbound probe config load failed: %w", err)
 	}
+	// Inbounds are never valid in the disposable probing process. Keep the
+	// remaining application features intact: silently filtering them here can
+	// break otherwise valid third-party outbound configurations.
 	config.Inbound = nil
-	var essentialApp []*serial.TypedMessage
-	for _, app := range config.App {
-		if app.Type == "xray.app.proxyman.OutboundConfig" ||
-			app.Type == "xray.app.dispatcher.Config" ||
-			app.Type == "xray.app.log.Config" ||
-			app.Type == "xray.app.router.Config" ||
-			app.Type == "xray.core.app.observatory.burst.Config" {
-			essentialApp = append(essentialApp, app)
-		}
-	}
-	config.App = essentialApp
 
 	inst, err := core.New(config)
 	if err != nil {
@@ -492,15 +504,15 @@ func (c *OutboundProbeController) ProbeOutbounds(
 				if probeErr == nil {
 					probeErr = errors.New("outbound probe observatory closed before completion")
 				}
-				return outboundProbeSnapshot(inst, balancerTags, probeErr, handler)
+				return outboundProbeSnapshot(inst, balancerTags, probeErr, true, nil)
 			}
-			if _, err := outboundProbeSnapshot(inst, balancerTags, nil, handler); err != nil {
+			if _, err := outboundProbeSnapshot(inst, balancerTags, nil, false, handler); err != nil {
 				cancel()
 				<-probeDone
 				return "", err
 			}
 		case probeErr := <-probeDone:
-			return outboundProbeSnapshot(inst, balancerTags, probeErr, handler)
+			return outboundProbeSnapshot(inst, balancerTags, probeErr, true, nil)
 		}
 	}
 }
@@ -509,6 +521,7 @@ func outboundProbeSnapshot(
 	inst *core.Instance,
 	balancerTags []string,
 	probeErr error,
+	final bool,
 	handler OutboundProbeHandler,
 ) (string, error) {
 	feature := inst.GetFeature(coreextension.ObservatoryType())
@@ -554,7 +567,7 @@ func outboundProbeSnapshot(
 	}
 
 	payload := outboundProbeBatchResult{
-		Completed:          probeErr == nil,
+		Completed:          final && probeErr == nil,
 		Cancelled:          errors.Is(probeErr, context.Canceled),
 		NetworkUnavailable: errors.Is(probeErr, coreextension.ErrObservatoryProbeNetworkUnavailable),
 		Results:            statuses,
@@ -572,86 +585,6 @@ func outboundProbeSnapshot(
 		handler.OnOutboundProbeUpdate(resultJSON)
 	}
 	return resultJSON, nil
-}
-
-func measureOutboundDelay(ConfigureFileContent, url, warmTarget string) (outboundDelayResult, error) {
-	failure := outboundDelayResult{Delay: -1}
-	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
-	if err != nil {
-		return failure, fmt.Errorf("config load error: %w", err)
-	}
-	plan, err := routedBalancerPlanForConfig(config)
-	if err != nil {
-		return failure, fmt.Errorf("speed-test route inspection failed: %w", err)
-	}
-
-	// Simplify config for testing
-	config.Inbound = nil
-	var essentialApp []*serial.TypedMessage
-	for _, app := range config.App {
-		if app.Type == "xray.app.proxyman.OutboundConfig" ||
-			app.Type == "xray.app.dispatcher.Config" ||
-			app.Type == "xray.app.log.Config" ||
-			app.Type == "xray.app.router.Config" ||
-			app.Type == "xray.core.app.observatory.Config" ||
-			app.Type == "xray.core.app.observatory.burst.Config" {
-			essentialApp = append(essentialApp, app)
-		}
-	}
-	config.App = essentialApp
-
-	inst, err := core.New(config)
-	if err != nil {
-		return failure, fmt.Errorf("instance creation failed: %w", err)
-	}
-
-	if err := inst.Start(); err != nil {
-		return failure, fmt.Errorf("startup failed: %w", err)
-	}
-	defer inst.Close()
-
-	if warmTarget != "" && plan.tag != "" {
-		if err := setBalancerOverride(inst, plan.tag, warmTarget); err == nil {
-			log.Printf("testing policy group through warm route %q", warmTarget)
-			delay, warmErr := measureInstDelayWithOptions(context.Background(), inst, url, 4*time.Second, 1)
-			_ = clearBalancerOverride(inst, plan.tag)
-			if warmErr == nil {
-				// The override is the route that actually completed this request.
-				// The observatory may still be cold here, so its current principle
-				// target is not yet evidence that another route is viable.
-				return outboundDelayResult{Delay: delay, OutboundTag: warmTarget}, nil
-			}
-			log.Printf("warm route %q failed, waiting for fresh observatory result: %v", warmTarget, warmErr)
-		} else {
-			log.Printf("cached warm route %q is not usable by this policy group: %v", warmTarget, err)
-		}
-	}
-
-	readinessDeadline := time.Duration(0)
-	if len(plan.selectors) > 0 {
-		readinessDeadline, err = observationResultDeadline(inst)
-		if err != nil {
-			return failure, fmt.Errorf("observatory deadline unavailable: %w", err)
-		}
-	}
-	if err := waitForObservatoryReady(inst, plan.selectors, readinessDeadline); err != nil {
-		return failure, err
-	}
-	delay, err := measureInstDelay(context.Background(), inst, url)
-	if err != nil {
-		return failure, err
-	}
-	target, _ := firstBalancerPrincipleTarget(inst, plan.tag)
-	return outboundDelayResult{Delay: delay, OutboundTag: target}, nil
-}
-
-// routedBalancerSelectors returns the selectors used by the first routed
-// balancer. Speed-test configurations contain one catch-all balancer rule, so
-// these selectors identify the policy-group members that must be observed
-// before the measured request is dispatched.
-func routedBalancerSelectors(config *core.Config) ([]string, error) {
-	plan, err := routedBalancerPlanForConfig(config)
-	return plan.selectors, err
 }
 
 func routedBalancerPlanForConfig(config *core.Config) (routedBalancerPlan, error) {
@@ -700,87 +633,6 @@ func routedBalancerPlanForConfig(config *core.Config) (routedBalancerPlan, error
 		}
 	}
 	return routedBalancerPlan{}, nil
-}
-
-// waitForObservatoryReady prevents a policy-group measurement from racing the
-// temporary core's initial probes. As soon as one candidate is known alive the
-// balancer can safely dispatch through it. If every candidate has completed
-// and none is alive, fail immediately instead of falling through to a default
-// outbound.
-func waitForObservatoryReady(inst *core.Instance, selectors []string, timeout time.Duration) error {
-	if len(selectors) == 0 {
-		return nil
-	}
-
-	feature := inst.GetFeature(coreextension.ObservatoryType())
-	observer, ok := feature.(coreextension.Observatory)
-	if !ok {
-		return errors.New("policy-group observatory is unavailable")
-	}
-	managerFeature := inst.GetFeature(coreoutbound.ManagerType())
-	manager, ok := managerFeature.(coreoutbound.HandlerSelector)
-	if !ok {
-		return errors.New("outbound manager cannot select policy-group members")
-	}
-	candidates := manager.Select(selectors)
-	if len(candidates) == 0 {
-		return errors.New("policy group has no candidate outbounds")
-	}
-	candidateSet := make(map[string]struct{}, len(candidates))
-	for _, tag := range candidates {
-		candidateSet[tag] = struct{}{}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	notifier, ok := feature.(coreextension.ObservatoryUpdateNotifier)
-	if !ok {
-		return errors.New("policy-group observatory does not publish update notifications")
-	}
-	updates, unsubscribe := notifier.SubscribeObservationUpdates()
-	defer unsubscribe()
-
-	for {
-		observation, err := observer.GetObservation(ctx)
-		if err != nil {
-			return fmt.Errorf("observatory query failed: %w", err)
-		}
-		result, ok := observation.(*coreobservatory.ObservationResult)
-		if !ok {
-			return errors.New("unexpected observatory result type")
-		}
-		ready, complete := policyGroupObservationState(result, candidateSet)
-		if ready {
-			return nil
-		}
-		if complete {
-			return errors.New("policy group has no healthy outbound")
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("policy-group observatory readiness timeout: %w", ctx.Err())
-		case _, open := <-updates:
-			if !open {
-				return errors.New("policy-group observatory closed before publishing a usable result")
-			}
-		}
-	}
-}
-
-func policyGroupObservationState(result *coreobservatory.ObservationResult, candidates map[string]struct{}) (bool, bool) {
-	completed := make(map[string]struct{}, len(candidates))
-	for _, status := range result.GetStatus() {
-		tag := status.GetOutboundTag()
-		if _, expected := candidates[tag]; !expected {
-			continue
-		}
-		completed[tag] = struct{}{}
-		if status.GetAlive() {
-			return true, len(completed) == len(candidates)
-		}
-	}
-	return false, len(completed) == len(candidates)
 }
 
 func balancerFeatures(inst *core.Instance) (corerouting.BalancerPrincipleTarget, corerouting.BalancerOverrider, error) {

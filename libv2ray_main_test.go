@@ -6,7 +6,6 @@ import (
 	"errors"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
 	coreextension "github.com/xtls/xray-core/features/extension"
-	coreoutbound "github.com/xtls/xray-core/features/outbound"
 	corerouting "github.com/xtls/xray-core/features/routing"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	"google.golang.org/protobuf/proto"
@@ -103,7 +101,7 @@ func TestResetNetworkStateReportsFailedRecovery(t *testing.T) {
 	}
 }
 
-func TestRoutedBalancerSelectors(t *testing.T) {
+func TestRoutedBalancerPlan(t *testing.T) {
 	routerConfig := &corerouter.Config{
 		Rule: []*corerouter.RoutingRule{{
 			TargetTag: &corerouter.RoutingRule_BalancingTag{BalancingTag: "balancer-main"},
@@ -119,19 +117,15 @@ func TestRoutedBalancerSelectors(t *testing.T) {
 		serial.ToTypedMessage(&coreobservatory.Config{SubjectSelector: []string{"proxy-policy-"}}),
 	}}
 
-	selectors, err := routedBalancerSelectors(config)
-	if err != nil {
-		t.Fatalf("routedBalancerSelectors returned an error: %v", err)
-	}
-	if want := []string{"proxy-policy-"}; !reflect.DeepEqual(selectors, want) {
-		t.Fatalf("selectors = %v, want %v", selectors, want)
-	}
 	plan, err := routedBalancerPlanForConfig(config)
 	if err != nil {
 		t.Fatalf("routedBalancerPlanForConfig returned an error: %v", err)
 	}
 	if plan.tag != "balancer-main" {
 		t.Fatalf("balancer tag = %q, want balancer-main", plan.tag)
+	}
+	if want := []string{"proxy-policy-"}; !reflect.DeepEqual(plan.selectors, want) {
+		t.Fatalf("selectors = %v, want %v", plan.selectors, want)
 	}
 }
 
@@ -160,7 +154,7 @@ func TestRoutedBalancerPlanIgnoresNonObservableStrategy(t *testing.T) {
 	}
 }
 
-func TestRoutedBalancerSelectorsWithoutObservatory(t *testing.T) {
+func TestRoutedBalancerPlanWithoutObservatory(t *testing.T) {
 	routerConfig := &corerouter.Config{
 		Rule: []*corerouter.RoutingRule{{
 			TargetTag: &corerouter.RoutingRule_BalancingTag{BalancingTag: "balancer-main"},
@@ -168,176 +162,12 @@ func TestRoutedBalancerSelectorsWithoutObservatory(t *testing.T) {
 	}
 	config := &core.Config{App: []*serial.TypedMessage{serial.ToTypedMessage(routerConfig)}}
 
-	selectors, err := routedBalancerSelectors(config)
+	plan, err := routedBalancerPlanForConfig(config)
 	if err != nil {
-		t.Fatalf("routedBalancerSelectors returned an error: %v", err)
+		t.Fatalf("routedBalancerPlanForConfig returned an error: %v", err)
 	}
-	if selectors != nil {
-		t.Fatalf("selectors = %v, want nil", selectors)
-	}
-}
-
-func TestPolicyGroupObservationState(t *testing.T) {
-	candidates := map[string]struct{}{"a": {}, "b": {}}
-	tests := []struct {
-		name     string
-		statuses []*coreobservatory.OutboundStatus
-		ready    bool
-		complete bool
-	}{
-		{name: "empty"},
-		{
-			name:     "partial dead",
-			statuses: []*coreobservatory.OutboundStatus{{OutboundTag: "a"}},
-		},
-		{
-			name:     "first healthy",
-			statuses: []*coreobservatory.OutboundStatus{{OutboundTag: "a", Alive: true}},
-			ready:    true,
-		},
-		{
-			name: "all dead",
-			statuses: []*coreobservatory.OutboundStatus{
-				{OutboundTag: "a"},
-				{OutboundTag: "b"},
-			},
-			complete: true,
-		},
-		{
-			name: "ignores unrelated status",
-			statuses: []*coreobservatory.OutboundStatus{
-				{OutboundTag: "unrelated", Alive: true},
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			ready, complete := policyGroupObservationState(
-				&coreobservatory.ObservationResult{Status: test.statuses},
-				candidates,
-			)
-			if ready != test.ready || complete != test.complete {
-				t.Fatalf("state = (%v, %v), want (%v, %v)", ready, complete, test.ready, test.complete)
-			}
-		})
-	}
-}
-
-type readinessTestObserver struct {
-	access     sync.Mutex
-	statuses   []*coreobservatory.OutboundStatus
-	updates    coreextension.ObservatoryUpdateDispatcher
-	subscribed chan struct{}
-	once       sync.Once
-}
-
-func (*readinessTestObserver) Type() interface{} { return coreextension.ObservatoryType() }
-func (*readinessTestObserver) Start() error      { return nil }
-func (o *readinessTestObserver) Close() error {
-	o.updates.Close()
-	return nil
-}
-func (o *readinessTestObserver) GetObservation(context.Context) (proto.Message, error) {
-	o.access.Lock()
-	defer o.access.Unlock()
-	return &coreobservatory.ObservationResult{Status: append([]*coreobservatory.OutboundStatus(nil), o.statuses...)}, nil
-}
-func (o *readinessTestObserver) SubscribeObservationUpdates() (<-chan struct{}, func()) {
-	updates, unsubscribe := o.updates.SubscribeObservationUpdates()
-	o.once.Do(func() { close(o.subscribed) })
-	return updates, unsubscribe
-}
-func (o *readinessTestObserver) publish(statuses ...*coreobservatory.OutboundStatus) {
-	o.access.Lock()
-	o.statuses = statuses
-	o.access.Unlock()
-	o.updates.NotifyObservationUpdate()
-}
-
-type readinessTestOutboundManager struct {
-	tags []string
-}
-
-func (*readinessTestOutboundManager) Type() interface{} { return coreoutbound.ManagerType() }
-func (*readinessTestOutboundManager) Start() error      { return nil }
-func (*readinessTestOutboundManager) Close() error      { return nil }
-func (*readinessTestOutboundManager) GetHandler(string) coreoutbound.Handler {
-	return nil
-}
-func (*readinessTestOutboundManager) GetDefaultHandler() coreoutbound.Handler {
-	return nil
-}
-func (*readinessTestOutboundManager) AddHandler(context.Context, coreoutbound.Handler) error {
-	return nil
-}
-func (*readinessTestOutboundManager) RemoveHandler(context.Context, string) error { return nil }
-func (*readinessTestOutboundManager) ListHandlers(context.Context) []coreoutbound.Handler {
-	return nil
-}
-func (m *readinessTestOutboundManager) Select([]string) []string {
-	return append([]string(nil), m.tags...)
-}
-
-func newReadinessTestInstance(t *testing.T) (*core.Instance, *readinessTestObserver) {
-	t.Helper()
-	observer := &readinessTestObserver{subscribed: make(chan struct{})}
-	manager := &readinessTestOutboundManager{tags: []string{"proxy-a", "proxy-b"}}
-	instance := &core.Instance{}
-	if err := instance.AddFeature(observer); err != nil {
-		t.Fatal(err)
-	}
-	if err := instance.AddFeature(manager); err != nil {
-		t.Fatal(err)
-	}
-	return instance, observer
-}
-
-func TestWaitForObservatoryReadyWakesOnUpdate(t *testing.T) {
-	instance, observer := newReadinessTestInstance(t)
-	done := make(chan error, 1)
-	go func() {
-		done <- waitForObservatoryReady(instance, []string{"proxy-"}, time.Second)
-	}()
-	<-observer.subscribed
-	observer.publish(&coreobservatory.OutboundStatus{OutboundTag: "proxy-a", Alive: true})
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("observatory update did not wake the readiness wait")
-	}
-}
-
-func TestWaitForObservatoryReadyReportsClosedUpdates(t *testing.T) {
-	instance, observer := newReadinessTestInstance(t)
-	done := make(chan error, 1)
-	go func() {
-		done <- waitForObservatoryReady(instance, []string{"proxy-"}, time.Second)
-	}()
-	<-observer.subscribed
-	observer.updates.Close()
-
-	select {
-	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "closed") {
-			t.Fatalf("readiness error = %v, want closed-observatory error", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("closed observatory did not end the readiness wait")
-	}
-}
-
-func TestOutboundDelayResultJSON(t *testing.T) {
-	payload, err := json.Marshal(outboundDelayResult{Delay: 42, OutboundTag: "proxy-policy-a"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(payload), `{"delay":42,"outboundTag":"proxy-policy-a"}`; got != want {
-		t.Fatalf("payload = %s, want %s", got, want)
+	if plan.tag != "" || plan.selectors != nil {
+		t.Fatalf("plan = %#v, want empty plan", plan)
 	}
 }
 
@@ -365,6 +195,19 @@ func (r *outboundProbeTestRouter) GetPrincipleTarget(tag string) ([]string, erro
 	return append([]string(nil), r.targets[tag]...), nil
 }
 
+type outboundProbeTestObserver struct {
+	statuses []*coreobservatory.OutboundStatus
+}
+
+func (*outboundProbeTestObserver) Type() interface{} { return coreextension.ObservatoryType() }
+func (*outboundProbeTestObserver) Start() error      { return nil }
+func (*outboundProbeTestObserver) Close() error      { return nil }
+func (o *outboundProbeTestObserver) GetObservation(context.Context) (proto.Message, error) {
+	return &coreobservatory.ObservationResult{
+		Status: append([]*coreobservatory.OutboundStatus(nil), o.statuses...),
+	}, nil
+}
+
 type outboundProbeTestHandler struct {
 	payload string
 }
@@ -385,8 +228,20 @@ func TestOutboundProbeControllerIsSingleUse(t *testing.T) {
 	}
 }
 
+func TestValidateOutboundProbeConfigRejectsMalformedSource(t *testing.T) {
+	if err := ValidateOutboundProbeConfig(`{"outbounds":[{"tag":"proxy","protocol":"freedom"}]}`); err != nil {
+		t.Fatalf("valid source was rejected: %v", err)
+	}
+	if err := ValidateOutboundProbeConfig(`{"outbounds":[{"protocol":"not-a-protocol"}]}`); err == nil {
+		t.Fatal("unknown outbound protocol was accepted")
+	}
+	if err := ValidateOutboundProbeConfig(`{"log":{"loglevel":"warning"}}`); err == nil {
+		t.Fatal("source without outbounds was accepted")
+	}
+}
+
 func TestOutboundProbeSnapshotPreservesPartialResults(t *testing.T) {
-	observer := &readinessTestObserver{subscribed: make(chan struct{})}
+	observer := &outboundProbeTestObserver{}
 	observer.statuses = []*coreobservatory.OutboundStatus{
 		{
 			OutboundTag: "probe-b",
@@ -419,7 +274,8 @@ func TestOutboundProbeSnapshotPreservesPartialResults(t *testing.T) {
 	payload, err := outboundProbeSnapshot(
 		instance,
 		[]string{"probe-balancer"},
-		context.Canceled,
+		nil,
+		false,
 		handler,
 	)
 	if err != nil {
@@ -432,8 +288,8 @@ func TestOutboundProbeSnapshotPreservesPartialResults(t *testing.T) {
 	if err := json.Unmarshal([]byte(payload), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Completed || !result.Cancelled {
-		t.Fatalf("completion state = (%v, %v), want incomplete and cancelled", result.Completed, result.Cancelled)
+	if result.Completed || result.Cancelled {
+		t.Fatalf("progress state = (%v, %v), want incomplete and active", result.Completed, result.Cancelled)
 	}
 	if len(result.Results) != 2 || result.Results[0].OutboundTag != "probe-a" {
 		t.Fatalf("results = %#v, want two tag-sorted partial results", result.Results)
@@ -443,6 +299,31 @@ func TestOutboundProbeSnapshotPreservesPartialResults(t *testing.T) {
 	}
 	if got := result.BalancerTargets["probe-balancer"]; got != "probe-a" {
 		t.Fatalf("balancer target = %q, want probe-a", got)
+	}
+
+	finalPayload, err := outboundProbeSnapshot(instance, []string{"probe-balancer"}, nil, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.payload != payload {
+		t.Fatal("final result was unexpectedly delivered through the progressive callback")
+	}
+	if err := json.Unmarshal([]byte(finalPayload), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Completed || result.Cancelled {
+		t.Fatalf("final state = (%v, %v), want complete and active", result.Completed, result.Cancelled)
+	}
+
+	cancelledPayload, err := outboundProbeSnapshot(instance, nil, context.Canceled, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(cancelledPayload), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Completed || !result.Cancelled {
+		t.Fatalf("cancelled state = (%v, %v), want incomplete and cancelled", result.Completed, result.Cancelled)
 	}
 }
 
