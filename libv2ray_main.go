@@ -482,8 +482,12 @@ func waitForObservatoryReady(inst *core.Instance, selectors []string, timeout ti
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
+	notifier, ok := feature.(coreextension.ObservatoryUpdateNotifier)
+	if !ok {
+		return errors.New("policy-group observatory does not publish update notifications")
+	}
+	updates, unsubscribe := notifier.SubscribeObservationUpdates()
+	defer unsubscribe()
 
 	for {
 		observation, err := observer.GetObservation(ctx)
@@ -505,7 +509,10 @@ func waitForObservatoryReady(inst *core.Instance, selectors []string, timeout ti
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("policy-group observatory readiness timeout: %w", ctx.Err())
-		case <-ticker.C:
+		case _, open := <-updates:
+			if !open {
+				return errors.New("policy-group observatory closed before publishing a usable result")
+			}
 		}
 	}
 }
@@ -621,41 +628,49 @@ func watchBalancerTargetChanges(inst *core.Instance, balancerTag string, handler
 		return nil, errors.New("observatory does not publish update notifications")
 	}
 
-	var access sync.Mutex
-	stopped := false
-	lastTarget := ""
-	unsubscribe := notifier.SubscribeObservationUpdates(func() {
-		access.Lock()
-		defer access.Unlock()
-		if stopped {
-			return
-		}
+	updates, unsubscribe := notifier.SubscribeObservationUpdates()
+	watchCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer unsubscribe()
+		lastTarget := ""
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case _, open := <-updates:
+				if !open || watchCtx.Err() != nil {
+					return
+				}
+			}
 
-		target, err := firstBalancerPrincipleTarget(inst, balancerTag)
-		if err != nil || target == "" {
-			return
-		}
-		if target == lastTarget {
-			return
-		}
-		lastTarget = target
+			target, err := firstBalancerPrincipleTarget(inst, balancerTag)
+			if err != nil || target == "" || target == lastTarget {
+				continue
+			}
+			lastTarget = target
 
-		if override, err := getBalancerOverride(inst, balancerTag); err == nil && override != "" {
-			if err := clearBalancerOverride(inst, balancerTag); err != nil {
-				log.Printf("failed to release warm route %q: %v", override, err)
-			} else {
-				log.Printf("released warm route %q after fresh observatory result", override)
+			if override, err := getBalancerOverride(inst, balancerTag); err == nil && override != "" {
+				if err := clearBalancerOverride(inst, balancerTag); err != nil {
+					log.Printf("failed to release warm route %q: %v", override, err)
+				} else {
+					log.Printf("released warm route %q after fresh observatory result", override)
+				}
+			}
+			if handler != nil {
+				handler.OnBalancerTargetChanged(balancerTag, target)
 			}
 		}
-		if handler != nil {
-			handler.OnBalancerTargetChanged(balancerTag, target)
-		}
-	})
+	}()
+
+	var stopOnce sync.Once
 	return func() {
-		access.Lock()
-		stopped = true
-		unsubscribe()
-		access.Unlock()
+		stopOnce.Do(func() {
+			cancel()
+			unsubscribe()
+			<-done
+		})
 	}, nil
 }
 

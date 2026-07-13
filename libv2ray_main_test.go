@@ -1,10 +1,12 @@
 package libv2ray
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,13 +14,16 @@ import (
 	corerouter "github.com/xtls/xray-core/app/router"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	coreextension "github.com/xtls/xray-core/features/extension"
+	coreoutbound "github.com/xtls/xray-core/features/outbound"
+	"google.golang.org/protobuf/proto"
 )
 
 type resetTestCallback struct {
 	statuses []string
 }
 
-func (*resetTestCallback) Startup() int { return 0 }
+func (*resetTestCallback) Startup() int  { return 0 }
 func (*resetTestCallback) Shutdown() int { return 0 }
 func (c *resetTestCallback) OnEmitStatus(_ int, status string) int {
 	c.statuses = append(c.statuses, status)
@@ -214,6 +219,113 @@ func TestPolicyGroupObservationState(t *testing.T) {
 				t.Fatalf("state = (%v, %v), want (%v, %v)", ready, complete, test.ready, test.complete)
 			}
 		})
+	}
+}
+
+type readinessTestObserver struct {
+	access     sync.Mutex
+	statuses   []*coreobservatory.OutboundStatus
+	updates    coreextension.ObservatoryUpdateDispatcher
+	subscribed chan struct{}
+	once       sync.Once
+}
+
+func (*readinessTestObserver) Type() interface{} { return coreextension.ObservatoryType() }
+func (*readinessTestObserver) Start() error      { return nil }
+func (o *readinessTestObserver) Close() error {
+	o.updates.Close()
+	return nil
+}
+func (o *readinessTestObserver) GetObservation(context.Context) (proto.Message, error) {
+	o.access.Lock()
+	defer o.access.Unlock()
+	return &coreobservatory.ObservationResult{Status: append([]*coreobservatory.OutboundStatus(nil), o.statuses...)}, nil
+}
+func (o *readinessTestObserver) SubscribeObservationUpdates() (<-chan struct{}, func()) {
+	updates, unsubscribe := o.updates.SubscribeObservationUpdates()
+	o.once.Do(func() { close(o.subscribed) })
+	return updates, unsubscribe
+}
+func (o *readinessTestObserver) publish(statuses ...*coreobservatory.OutboundStatus) {
+	o.access.Lock()
+	o.statuses = statuses
+	o.access.Unlock()
+	o.updates.NotifyObservationUpdate()
+}
+
+type readinessTestOutboundManager struct {
+	tags []string
+}
+
+func (*readinessTestOutboundManager) Type() interface{} { return coreoutbound.ManagerType() }
+func (*readinessTestOutboundManager) Start() error      { return nil }
+func (*readinessTestOutboundManager) Close() error      { return nil }
+func (*readinessTestOutboundManager) GetHandler(string) coreoutbound.Handler {
+	return nil
+}
+func (*readinessTestOutboundManager) GetDefaultHandler() coreoutbound.Handler {
+	return nil
+}
+func (*readinessTestOutboundManager) AddHandler(context.Context, coreoutbound.Handler) error {
+	return nil
+}
+func (*readinessTestOutboundManager) RemoveHandler(context.Context, string) error { return nil }
+func (*readinessTestOutboundManager) ListHandlers(context.Context) []coreoutbound.Handler {
+	return nil
+}
+func (m *readinessTestOutboundManager) Select([]string) []string {
+	return append([]string(nil), m.tags...)
+}
+
+func newReadinessTestInstance(t *testing.T) (*core.Instance, *readinessTestObserver) {
+	t.Helper()
+	observer := &readinessTestObserver{subscribed: make(chan struct{})}
+	manager := &readinessTestOutboundManager{tags: []string{"proxy-a", "proxy-b"}}
+	instance := &core.Instance{}
+	if err := instance.AddFeature(observer); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.AddFeature(manager); err != nil {
+		t.Fatal(err)
+	}
+	return instance, observer
+}
+
+func TestWaitForObservatoryReadyWakesOnUpdate(t *testing.T) {
+	instance, observer := newReadinessTestInstance(t)
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForObservatoryReady(instance, []string{"proxy-"}, time.Second)
+	}()
+	<-observer.subscribed
+	observer.publish(&coreobservatory.OutboundStatus{OutboundTag: "proxy-a", Alive: true})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("observatory update did not wake the readiness wait")
+	}
+}
+
+func TestWaitForObservatoryReadyReportsClosedUpdates(t *testing.T) {
+	instance, observer := newReadinessTestInstance(t)
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForObservatoryReady(instance, []string{"proxy-"}, time.Second)
+	}()
+	<-observer.subscribed
+	observer.updates.Close()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("readiness error = %v, want closed-observatory error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closed observatory did not end the readiness wait")
 	}
 }
 
