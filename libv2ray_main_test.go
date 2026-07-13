@@ -16,6 +16,8 @@ import (
 	core "github.com/xtls/xray-core/core"
 	coreextension "github.com/xtls/xray-core/features/extension"
 	coreoutbound "github.com/xtls/xray-core/features/outbound"
+	corerouting "github.com/xtls/xray-core/features/routing"
+	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -349,5 +351,145 @@ func TestObservationResultDeadlineFollowsProbeDeadline(t *testing.T) {
 	}
 	if _, err := observationResultDeadlineForProbe(0); err == nil {
 		t.Fatal("expected an error for an invalid probe deadline")
+	}
+}
+
+type outboundProbeTestRouter struct {
+	targets map[string][]string
+}
+
+func (*outboundProbeTestRouter) Type() interface{} { return corerouting.RouterType() }
+func (*outboundProbeTestRouter) Start() error      { return nil }
+func (*outboundProbeTestRouter) Close() error      { return nil }
+func (r *outboundProbeTestRouter) GetPrincipleTarget(tag string) ([]string, error) {
+	return append([]string(nil), r.targets[tag]...), nil
+}
+
+type outboundProbeTestHandler struct {
+	payload string
+}
+
+func (h *outboundProbeTestHandler) OnOutboundProbeUpdate(payload string) int {
+	h.payload = payload
+	return 0
+}
+
+func TestOutboundProbeControllerIsSingleUse(t *testing.T) {
+	controller := NewOutboundProbeController()
+	if _, err := controller.ProbeOutbounds("{}", "not-json", "[]", 1, 1, nil); err == nil {
+		t.Fatal("first malformed invocation unexpectedly succeeded")
+	}
+	if _, err := controller.ProbeOutbounds("{}", "[]", "[]", 1, 1, nil); err == nil ||
+		!strings.Contains(err.Error(), "single-use") {
+		t.Fatalf("second invocation error = %v, want single-use rejection", err)
+	}
+}
+
+func TestOutboundProbeSnapshotPreservesPartialResults(t *testing.T) {
+	observer := &readinessTestObserver{subscribed: make(chan struct{})}
+	observer.statuses = []*coreobservatory.OutboundStatus{
+		{
+			OutboundTag: "probe-b",
+			Alive:       false,
+			HealthPing: &coreobservatory.HealthPingMeasurementResult{
+				All:  1,
+				Fail: 1,
+			},
+		},
+		{
+			OutboundTag: "probe-a",
+			Alive:       true,
+			Delay:       42,
+			HealthPing: &coreobservatory.HealthPingMeasurementResult{
+				All:       1,
+				Deviation: 3,
+			},
+		},
+	}
+	instance := &core.Instance{}
+	if err := instance.AddFeature(observer); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.AddFeature(&outboundProbeTestRouter{
+		targets: map[string][]string{"probe-balancer": {"probe-a"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := &outboundProbeTestHandler{}
+	payload, err := outboundProbeSnapshot(
+		instance,
+		[]string{"probe-balancer"},
+		context.Canceled,
+		handler,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handler.payload != payload {
+		t.Fatal("progressive callback did not receive the encoded snapshot")
+	}
+	var result outboundProbeBatchResult
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Completed || !result.Cancelled {
+		t.Fatalf("completion state = (%v, %v), want incomplete and cancelled", result.Completed, result.Cancelled)
+	}
+	if len(result.Results) != 2 || result.Results[0].OutboundTag != "probe-a" {
+		t.Fatalf("results = %#v, want two tag-sorted partial results", result.Results)
+	}
+	if result.Results[0].Delay != 42 || result.Results[0].Samples != 1 || result.Results[0].Deviation != 3 {
+		t.Fatalf("probe-a result = %#v", result.Results[0])
+	}
+	if got := result.BalancerTargets["probe-balancer"]; got != "probe-a" {
+		t.Fatalf("balancer target = %q, want probe-a", got)
+	}
+}
+
+func TestOneShotProbeConfigContract(t *testing.T) {
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(`{
+		"log": {"loglevel": "warning"},
+		"outbounds": [
+			{"tag": "probe-a", "protocol": "freedom"},
+			{"tag": "probe-b", "protocol": "freedom"}
+		],
+		"routing": {
+			"domainStrategy": "AsIs",
+			"rules": [],
+			"balancers": [{
+				"tag": "probe-balancer",
+				"selector": ["probe-"],
+				"strategy": {"type": "leastPing"}
+			}]
+		},
+		"burstObservatory": {
+			"subjectSelector": [],
+			"pingConfig": {
+				"destination": "https://example.com/generate_204",
+				"httpMethod": "GET",
+				"interval": "1h",
+				"sampling": 1,
+				"timeout": "12s"
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := core.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close()
+	batch, ok := instance.GetFeature(coreextension.ObservatoryType()).(coreextension.ObservatoryBatchProbe)
+	if !ok {
+		t.Fatal("composite config did not create a one-shot batch observatory")
+	}
+	deadline, err := batch.ProbeOutboundsDeadline([]string{"probe-a", "probe-b"}, 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deadline != 12*time.Second {
+		t.Fatalf("batch deadline = %v, want 12s", deadline)
 	}
 }

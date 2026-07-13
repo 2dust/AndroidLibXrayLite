@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,7 +42,7 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 41 // Library version, update here only
+	libVersion           = 42 // Library version, update here only
 )
 
 const warmRouteDeadlineGrace = 2 * time.Second
@@ -54,6 +55,61 @@ type routedBalancerPlan struct {
 type outboundDelayResult struct {
 	Delay       int64  `json:"delay"`
 	OutboundTag string `json:"outboundTag,omitempty"`
+}
+
+// OutboundProbeHandler receives coalesced JSON snapshots while a one-shot
+// outbound probe batch is running. Callbacks are serialized and may contain
+// more than one newly completed outbound when native updates were coalesced.
+type OutboundProbeHandler interface {
+	OnOutboundProbeUpdate(string) int
+}
+
+type outboundProbeStatus struct {
+	OutboundTag   string `json:"outboundTag"`
+	Alive         bool   `json:"alive"`
+	Delay         int64  `json:"delay"`
+	LastError     string `json:"lastError,omitempty"`
+	Samples       int64  `json:"samples"`
+	FailedSamples int64  `json:"failedSamples"`
+	Deviation     int64  `json:"deviation"`
+}
+
+type outboundProbeBatchResult struct {
+	Completed          bool                  `json:"completed"`
+	Cancelled          bool                  `json:"cancelled,omitempty"`
+	NetworkUnavailable bool                  `json:"networkUnavailable,omitempty"`
+	Error              string                `json:"error,omitempty"`
+	Results            []outboundProbeStatus `json:"results"`
+	BalancerTargets    map[string]string     `json:"balancerTargets,omitempty"`
+}
+
+// OutboundProbeController owns one finite probe operation. It is separate from
+// CoreController because embedders are expected to run it in a short-lived,
+// dedicated process rather than beside a long-running proxy core.
+type OutboundProbeController struct {
+	access  sync.Mutex
+	cancel  context.CancelFunc
+	running bool
+	used    bool
+}
+
+// NewOutboundProbeController creates a single-use batch controller. The owning
+// process should be discarded after ProbeOutbounds returns, regardless of its
+// result, so a later batch cannot inherit process-wide native state.
+func NewOutboundProbeController() *OutboundProbeController {
+	return &OutboundProbeController{}
+}
+
+// Cancel interrupts the active batch, if any. ProbeOutbounds will return a
+// partial JSON snapshot containing every measurement completed before the
+// cancellation was observed.
+func (c *OutboundProbeController) Cancel() {
+	c.access.Lock()
+	cancel := c.cancel
+	c.access.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // CoreController represents a controller for managing Xray core instance lifecycle
@@ -323,6 +379,201 @@ func MeasureOutboundDelayWithWarmRoute(ConfigureFileContent, url, warmTarget str
 	return string(payload), nil
 }
 
+// ProbeOutbounds runs a finite, concurrent outbound probe batch through one
+// Xray instance. outboundTagsJSON and balancerTagsJSON are JSON string arrays.
+// The returned JSON always preserves partial runtime results; probe failures,
+// cancellation, and network loss are represented in that payload rather than
+// discarding successful measurements through a gomobile exception.
+func (c *OutboundProbeController) ProbeOutbounds(
+	configContent, outboundTagsJSON, balancerTagsJSON string,
+	maxConcurrency, samples int32,
+	handler OutboundProbeHandler,
+) (string, error) {
+	c.access.Lock()
+	if c.running {
+		c.access.Unlock()
+		return "", errors.New("an outbound probe batch is already running")
+	}
+	if c.used {
+		c.access.Unlock()
+		return "", errors.New("outbound probe controller is single-use")
+	}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	c.used = true
+	c.running = true
+	c.cancel = cancel
+	c.access.Unlock()
+	defer func() {
+		cancel()
+		c.access.Lock()
+		c.cancel = nil
+		c.running = false
+		c.access.Unlock()
+	}()
+
+	var outboundTags []string
+	if err := json.Unmarshal([]byte(outboundTagsJSON), &outboundTags); err != nil {
+		return "", fmt.Errorf("outbound probe tags are invalid: %w", err)
+	}
+	var balancerTags []string
+	if err := json.Unmarshal([]byte(balancerTagsJSON), &balancerTags); err != nil {
+		return "", fmt.Errorf("outbound probe balancer tags are invalid: %w", err)
+	}
+
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+	if err != nil {
+		return "", fmt.Errorf("outbound probe config load failed: %w", err)
+	}
+	config.Inbound = nil
+	var essentialApp []*serial.TypedMessage
+	for _, app := range config.App {
+		if app.Type == "xray.app.proxyman.OutboundConfig" ||
+			app.Type == "xray.app.dispatcher.Config" ||
+			app.Type == "xray.app.log.Config" ||
+			app.Type == "xray.app.router.Config" ||
+			app.Type == "xray.core.app.observatory.burst.Config" {
+			essentialApp = append(essentialApp, app)
+		}
+	}
+	config.App = essentialApp
+
+	inst, err := core.New(config)
+	if err != nil {
+		return "", fmt.Errorf("outbound probe instance creation failed: %w", err)
+	}
+	defer inst.Close()
+
+	feature := inst.GetFeature(coreextension.ObservatoryType())
+	batch, ok := feature.(coreextension.ObservatoryBatchProbe)
+	if !ok {
+		return "", errors.New("burst observatory does not support one-shot outbound probing")
+	}
+	notifier, ok := feature.(coreextension.ObservatoryUpdateNotifier)
+	if !ok {
+		return "", errors.New("outbound probe observatory does not publish updates")
+	}
+	deadline, err := batch.ProbeOutboundsDeadline(outboundTags, int(maxConcurrency), int(samples))
+	if err != nil {
+		return "", fmt.Errorf("outbound probe deadline is invalid: %w", err)
+	}
+	if deadline > time.Duration(1<<63-1)-warmRouteDeadlineGrace {
+		return "", errors.New("outbound probe deadline exceeds time.Duration")
+	}
+
+	updates, unsubscribe := notifier.SubscribeObservationUpdates()
+	defer unsubscribe()
+	if err := inst.Start(); err != nil {
+		return "", fmt.Errorf("outbound probe startup failed: %w", err)
+	}
+
+	probeCtx := baseCtx
+	deadlineCancel := func() {}
+	if deadline > 0 {
+		probeCtx, deadlineCancel = context.WithTimeout(baseCtx, deadline+warmRouteDeadlineGrace)
+	}
+	defer deadlineCancel()
+
+	probeDone := make(chan error, 1)
+	go func() {
+		probeDone <- batch.ProbeOutbounds(
+			probeCtx,
+			outboundTags,
+			int(maxConcurrency),
+			int(samples),
+		)
+	}()
+
+	for {
+		select {
+		case _, open := <-updates:
+			if !open {
+				cancel()
+				probeErr := <-probeDone
+				if probeErr == nil {
+					probeErr = errors.New("outbound probe observatory closed before completion")
+				}
+				return outboundProbeSnapshot(inst, balancerTags, probeErr, handler)
+			}
+			if _, err := outboundProbeSnapshot(inst, balancerTags, nil, handler); err != nil {
+				cancel()
+				<-probeDone
+				return "", err
+			}
+		case probeErr := <-probeDone:
+			return outboundProbeSnapshot(inst, balancerTags, probeErr, handler)
+		}
+	}
+}
+
+func outboundProbeSnapshot(
+	inst *core.Instance,
+	balancerTags []string,
+	probeErr error,
+	handler OutboundProbeHandler,
+) (string, error) {
+	feature := inst.GetFeature(coreextension.ObservatoryType())
+	observer, ok := feature.(coreextension.Observatory)
+	if !ok {
+		return "", errors.New("outbound probe observatory is unavailable")
+	}
+	message, err := observer.GetObservation(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("outbound probe result query failed: %w", err)
+	}
+	result, ok := message.(*coreobservatory.ObservationResult)
+	if !ok {
+		return "", errors.New("unexpected outbound probe result type")
+	}
+
+	statuses := make([]outboundProbeStatus, 0, len(result.GetStatus()))
+	for _, status := range result.GetStatus() {
+		health := status.GetHealthPing()
+		statuses = append(statuses, outboundProbeStatus{
+			OutboundTag:   status.GetOutboundTag(),
+			Alive:         status.GetAlive(),
+			Delay:         status.GetDelay(),
+			LastError:     status.GetLastErrorReason(),
+			Samples:       health.GetAll(),
+			FailedSamples: health.GetFail(),
+			Deviation:     health.GetDeviation(),
+		})
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		return statuses[i].OutboundTag < statuses[j].OutboundTag
+	})
+
+	targets := make(map[string]string)
+	for _, balancerTag := range balancerTags {
+		target, targetErr := firstBalancerPrincipleTarget(inst, balancerTag)
+		if targetErr == nil && target != "" {
+			targets[balancerTag] = target
+		}
+	}
+	if len(targets) == 0 {
+		targets = nil
+	}
+
+	payload := outboundProbeBatchResult{
+		Completed:          probeErr == nil,
+		Cancelled:          errors.Is(probeErr, context.Canceled),
+		NetworkUnavailable: errors.Is(probeErr, coreextension.ErrObservatoryProbeNetworkUnavailable),
+		Results:            statuses,
+		BalancerTargets:    targets,
+	}
+	if probeErr != nil {
+		payload.Error = probeErr.Error()
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("outbound probe result encoding failed: %w", err)
+	}
+	resultJSON := string(encoded)
+	if handler != nil {
+		handler.OnOutboundProbeUpdate(resultJSON)
+	}
+	return resultJSON, nil
+}
+
 func measureOutboundDelay(ConfigureFileContent, url, warmTarget string) (outboundDelayResult, error) {
 	failure := outboundDelayResult{Delay: -1}
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
@@ -552,9 +803,12 @@ func firstBalancerPrincipleTarget(inst *core.Instance, balancerTag string) (stri
 	if balancerTag == "" {
 		return "", nil
 	}
-	principle, _, err := balancerFeatures(inst)
-	if err != nil {
-		return "", err
+	if inst == nil {
+		return "", errors.New("core instance is nil")
+	}
+	principle, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
+	if !ok {
+		return "", errors.New("router does not expose balancer principle targets")
 	}
 	targets, err := principle.GetPrincipleTarget(balancerTag)
 	if err != nil {
