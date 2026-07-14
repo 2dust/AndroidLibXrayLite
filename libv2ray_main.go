@@ -2,6 +2,7 @@ package libv2ray
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,17 +11,24 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	coreapplog "github.com/xtls/xray-core/app/log"
+	coreobservatory "github.com/xtls/xray-core/app/observatory"
+	coreobservatoryburst "github.com/xtls/xray-core/app/observatory/burst"
+	corerouter "github.com/xtls/xray-core/app/router"
 	corecommlog "github.com/xtls/xray-core/common/log"
 	corenet "github.com/xtls/xray-core/common/net"
 	corefilesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	coreextension "github.com/xtls/xray-core/features/extension"
+	coreoutbound "github.com/xtls/xray-core/features/outbound"
+	corerouting "github.com/xtls/xray-core/features/routing"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -35,8 +43,75 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 38 // Library version, update here only
+	libVersion           = 42 // Library version, update here only
 )
+
+const (
+	warmRouteDeadlineGrace     = 2 * time.Second
+	defaultObservationDeadline = 5 * time.Second
+	balancerTargetPollInterval = 250 * time.Millisecond
+)
+
+type routedBalancerPlan struct {
+	tag       string
+	selectors []string
+}
+
+// OutboundProbeHandler receives JSON snapshots while a one-shot outbound probe
+// batch is running. Callbacks are serialized and are published after each
+// candidate finishes, even while other candidates are still pending. These
+// snapshots are non-terminal; the method return carries the final state.
+type OutboundProbeHandler interface {
+	OnOutboundProbeUpdate(string) int
+}
+
+type outboundProbeStatus struct {
+	OutboundTag   string `json:"outboundTag"`
+	Alive         bool   `json:"alive"`
+	Delay         int64  `json:"delay"`
+	LastError     string `json:"lastError,omitempty"`
+	Samples       int64  `json:"samples"`
+	FailedSamples int64  `json:"failedSamples"`
+	Deviation     int64  `json:"deviation"`
+}
+
+type outboundProbeBatchResult struct {
+	Completed          bool                  `json:"completed"`
+	Cancelled          bool                  `json:"cancelled,omitempty"`
+	NetworkUnavailable bool                  `json:"networkUnavailable,omitempty"`
+	Error              string                `json:"error,omitempty"`
+	Results            []outboundProbeStatus `json:"results"`
+	BalancerTargets    map[string]string     `json:"balancerTargets,omitempty"`
+}
+
+// OutboundProbeController owns one finite probe operation. It is separate from
+// CoreController because embedders are expected to run it in a short-lived,
+// dedicated process rather than beside a long-running proxy core.
+type OutboundProbeController struct {
+	access  sync.Mutex
+	cancel  context.CancelFunc
+	running bool
+	used    bool
+}
+
+// NewOutboundProbeController creates a single-use batch controller. The owning
+// process should be discarded after a probe method returns, regardless of its
+// result, so a later batch cannot inherit process-wide native state.
+func NewOutboundProbeController() *OutboundProbeController {
+	return &OutboundProbeController{}
+}
+
+// Cancel interrupts the active batch, if any. The probe method will return a
+// partial JSON snapshot containing every measurement completed before the
+// cancellation was observed.
+func (c *OutboundProbeController) Cancel() {
+	c.access.Lock()
+	cancel := c.cancel
+	c.access.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
 
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
@@ -44,6 +119,9 @@ type CoreController struct {
 	statsManager    corestats.Manager
 	coreMutex       sync.Mutex
 	coreInstance    *core.Instance
+	configContent   string
+	stopTargetWatch func()
+	warmRouteTimer  *time.Timer
 	IsRunning       bool
 }
 
@@ -52,6 +130,9 @@ type CoreCallbackHandler interface {
 	Startup() int
 	Shutdown() int
 	OnEmitStatus(int, string) int
+	// OnBalancerTargetChanged acknowledges a fresh target with zero. A nonzero
+	// result keeps any warm override active and retries the notification.
+	OnBalancerTargetChanged(string, string) int
 }
 
 // consoleLogWriter implements a log writer without datetime stamps
@@ -125,7 +206,11 @@ func (x *CoreController) StartLoop(configContent string, tunFd int32) (err error
 		return nil
 	}
 
-	return x.doStartLoop(configContent)
+	if err := x.doStartLoop(configContent, "", ""); err != nil {
+		return err
+	}
+	x.configContent = configContent
+	return nil
 }
 
 // StopLoop safely stops the core processing loop and releases resources
@@ -136,9 +221,87 @@ func (x *CoreController) StopLoop() error {
 
 	if x.IsRunning {
 		x.doShutdown()
+		x.configContent = ""
 		x.CallbackHandler.OnEmitStatus(0, "Core stopped")
 	}
 	return nil
+}
+
+// ResetNetworkState recreates the running Xray instance while keeping the
+// Android-owned TUN file descriptor open. Recreating the instance closes
+// network-bound TCP, UDP, mux and transport-pool state so new connections are
+// established on the current Android underlay after Wi-Fi/cellular changes.
+func (x *CoreController) ResetNetworkState() error {
+	return x.resetNetworkState("", "")
+}
+
+// ResetNetworkStateWithWarmRoute recreates the running Xray instance and
+// pins a previously viable outbound while the new observatory gathers results.
+// The override is removed only after the strategy has a fresh target and the
+// callback has acknowledged it. If observation stalls, the known route remains
+// active instead of leaving the balancer without a usable outbound.
+func (x *CoreController) ResetNetworkStateWithWarmRoute(balancerTag, target string) error {
+	return x.resetNetworkState(balancerTag, target)
+}
+
+func (x *CoreController) resetNetworkState(balancerTag, target string) error {
+	return x.resetNetworkStateWithStarter(balancerTag, target, x.doStartLoop)
+}
+
+func (x *CoreController) resetNetworkStateWithStarter(
+	balancerTag, target string,
+	startLoop func(string, string, string) error,
+) error {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if !x.IsRunning {
+		return nil
+	}
+	if x.configContent == "" {
+		return errors.New("running core configuration is unavailable")
+	}
+
+	configContent := x.configContent
+	log.Println("resetting core network state...")
+	x.doShutdown()
+	if resetErr := startLoop(configContent, balancerTag, target); resetErr != nil {
+		log.Printf("core network state reset failed, retrying original configuration: %v", resetErr)
+		if rollbackErr := startLoop(configContent, "", ""); rollbackErr != nil {
+			message := fmt.Sprintf(
+				"Core network state reset failed: %v; original configuration recovery failed: %v",
+				resetErr,
+				rollbackErr,
+			)
+			x.CallbackHandler.OnEmitStatus(1, message)
+			return fmt.Errorf(
+				"core network state reset failed: %w; original configuration recovery failed: %v",
+				resetErr,
+				rollbackErr,
+			)
+		}
+
+		x.CallbackHandler.OnEmitStatus(0, "Core network state reset recovered using the original configuration")
+		log.Println("Core network state reset recovered using the original configuration")
+		return nil
+	}
+
+	x.CallbackHandler.OnEmitStatus(0, "Core network state reset")
+	log.Println("Core network state reset successfully")
+	return nil
+}
+
+// GetBalancerPrincipleTarget returns the strategy's current first-choice
+// outbound. An empty result means the observatory has not produced a viable
+// target yet or the running profile has no compatible balancer.
+func (x *CoreController) GetBalancerPrincipleTarget(balancerTag string) (string, error) {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if !x.IsRunning || x.coreInstance == nil {
+		return "", nil
+	}
+	return firstBalancerPrincipleTarget(x.coreInstance, balancerTag)
 }
 
 // QueryStats retrieves and resets traffic statistics for a specific outbound tag and direction
@@ -206,7 +369,8 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 		return -1, fmt.Errorf("config load error: %w", err)
 	}
 
-	// Simplify config for testing
+	// Preserve the established lightweight single-outbound measurement API for
+	// existing embedders. Policy-group batch probing uses ProbeOutbounds instead.
 	config.Inbound = nil
 	var essentialApp []*serial.TypedMessage
 	for _, app := range config.App {
@@ -222,12 +386,629 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	if err != nil {
 		return -1, fmt.Errorf("instance creation failed: %w", err)
 	}
-
 	if err := inst.Start(); err != nil {
 		return -1, fmt.Errorf("startup failed: %w", err)
 	}
 	defer inst.Close()
 	return measureInstDelay(context.Background(), inst, url)
+}
+
+// ValidateOutboundProbeConfig parses one source configuration without creating
+// an Xray instance. Batch builders can use this to reject one malformed source
+// before combining it with otherwise viable profiles.
+func ValidateOutboundProbeConfig(configContent string) error {
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+	if err != nil {
+		return fmt.Errorf("outbound probe config load failed: %w", err)
+	}
+	if len(config.Outbound) == 0 {
+		return errors.New("outbound probe config has no outbounds")
+	}
+	return nil
+}
+
+// ProbeOutbounds runs a finite, bounded outbound probe batch through one Xray
+// instance. Each outbound tag is treated as an independent concurrency group.
+// Existing embedders retain their original API while ProbeOutboundGroups lets
+// callers preserve higher-level configuration boundaries.
+func (c *OutboundProbeController) ProbeOutbounds(
+	configContent, outboundTagsJSON, balancerTagsJSON string,
+	maxConcurrency, samples int32,
+	handler OutboundProbeHandler,
+) (string, error) {
+	return c.probeOutbounds(
+		configContent,
+		outboundTagsJSON,
+		balancerTagsJSON,
+		maxConcurrency,
+		samples,
+		handler,
+		false,
+	)
+}
+
+// ProbeOutboundGroups runs one probe task per JSON tag array. At most
+// maxConcurrency groups are active at once. Members of one group are checked
+// concurrently, and a progressive snapshot is published as each member
+// finishes. This matches v2rayNG's configuration-level concurrency semantics
+// while allowing a policy-group result to improve before its slowest member
+// reaches the timeout.
+func (c *OutboundProbeController) ProbeOutboundGroups(
+	configContent, outboundGroupsJSON, balancerTagsJSON string,
+	maxConcurrency, samples int32,
+	handler OutboundProbeHandler,
+) (string, error) {
+	return c.probeOutbounds(
+		configContent,
+		outboundGroupsJSON,
+		balancerTagsJSON,
+		maxConcurrency,
+		samples,
+		handler,
+		true,
+	)
+}
+
+func (c *OutboundProbeController) probeOutbounds(
+	configContent, outboundWorkJSON, balancerTagsJSON string,
+	maxConcurrency, samples int32,
+	handler OutboundProbeHandler,
+	grouped bool,
+) (string, error) {
+	c.access.Lock()
+	if c.running {
+		c.access.Unlock()
+		return "", errors.New("an outbound probe batch is already running")
+	}
+	if c.used {
+		c.access.Unlock()
+		return "", errors.New("outbound probe controller is single-use")
+	}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	c.used = true
+	c.running = true
+	c.cancel = cancel
+	c.access.Unlock()
+	defer func() {
+		cancel()
+		c.access.Lock()
+		c.cancel = nil
+		c.running = false
+		c.access.Unlock()
+	}()
+
+	outboundGroups, err := decodeOutboundProbeGroups(outboundWorkJSON, grouped)
+	if err != nil {
+		return "", err
+	}
+	if maxConcurrency <= 0 {
+		return "", errors.New("outbound probe concurrency must be positive")
+	}
+	if samples <= 0 {
+		return "", errors.New("outbound probe sample count must be positive")
+	}
+	var balancerTags []string
+	if err := json.Unmarshal([]byte(balancerTagsJSON), &balancerTags); err != nil {
+		return "", fmt.Errorf("outbound probe balancer tags are invalid: %w", err)
+	}
+
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+	if err != nil {
+		return "", fmt.Errorf("outbound probe config load failed: %w", err)
+	}
+	// Inbounds are never valid in the disposable probing process. Keep the
+	// remaining application features intact: silently filtering them here can
+	// break otherwise valid third-party outbound configurations.
+	config.Inbound = nil
+
+	inst, err := core.New(config)
+	if err != nil {
+		return "", fmt.Errorf("outbound probe instance creation failed: %w", err)
+	}
+	defer inst.Close()
+
+	feature := inst.GetFeature(coreextension.ObservatoryType())
+	batch, ok := feature.(coreextension.BurstObservatory)
+	if !ok {
+		return "", errors.New("outbound probe config does not contain a burst observatory")
+	}
+
+	if err := inst.Start(); err != nil {
+		return "", fmt.Errorf("outbound probe startup failed: %w", err)
+	}
+
+	probeErr := runUpstreamBurstProbeGroups(
+		baseCtx,
+		batch,
+		outboundGroups,
+		int(maxConcurrency),
+		int(samples),
+		func() error {
+			_, err := outboundProbeSnapshot(inst, balancerTags, nil, false, handler)
+			return err
+		},
+	)
+	return outboundProbeSnapshot(inst, balancerTags, probeErr, true, nil)
+}
+
+func decodeOutboundProbeGroups(encoded string, grouped bool) ([][]string, error) {
+	var groups [][]string
+	if grouped {
+		if err := json.Unmarshal([]byte(encoded), &groups); err != nil {
+			return nil, fmt.Errorf("outbound probe groups are invalid: %w", err)
+		}
+	} else {
+		var tags []string
+		if err := json.Unmarshal([]byte(encoded), &tags); err != nil {
+			return nil, fmt.Errorf("outbound probe tags are invalid: %w", err)
+		}
+		groups = make([][]string, 0, len(tags))
+		for _, tag := range tags {
+			groups = append(groups, []string{tag})
+		}
+	}
+	if len(groups) == 0 {
+		return nil, errors.New("outbound probe groups are empty")
+	}
+
+	seen := make(map[string]struct{})
+	for groupIndex, group := range groups {
+		if len(group) == 0 {
+			return nil, fmt.Errorf("outbound probe group %d is empty", groupIndex)
+		}
+		for _, tag := range group {
+			if tag == "" {
+				return nil, errors.New("outbound probe groups contain an empty tag")
+			}
+			if _, exists := seen[tag]; exists {
+				return nil, fmt.Errorf("outbound probe tag %q is duplicated", tag)
+			}
+			seen[tag] = struct{}{}
+		}
+	}
+	return groups, nil
+}
+
+// runUpstreamBurstChecks preserves the original flat-tag adapter API. Each tag
+// is an independent group, so maxConcurrency bounds simultaneous tag checks.
+func runUpstreamBurstChecks(
+	ctx context.Context,
+	observer coreextension.BurstObservatory,
+	outboundTags []string,
+	maxConcurrency, samples int,
+	afterProbe func() error,
+) error {
+	groups := make([][]string, 0, len(outboundTags))
+	for _, tag := range outboundTags {
+		groups = append(groups, []string{tag})
+	}
+	return runUpstreamBurstProbeGroups(ctx, observer, groups, maxConcurrency, samples, afterProbe)
+}
+
+// runUpstreamBurstProbeGroups adapts upstream's blocking Check API without
+// losing progressive results. A worker owns one configuration group until all
+// of its samples finish; group members use concurrent single-tag Check calls.
+// The coordinator serializes afterProbe callbacks as individual members return.
+func runUpstreamBurstProbeGroups(
+	ctx context.Context,
+	observer coreextension.BurstObservatory,
+	outboundGroups [][]string,
+	maxConcurrency, samples int,
+	afterProbe func() error,
+) error {
+	if maxConcurrency <= 0 {
+		return errors.New("outbound probe concurrency must be positive")
+	}
+	if samples <= 0 {
+		return errors.New("outbound probe sample count must be positive")
+	}
+	if len(outboundGroups) == 0 {
+		return errors.New("outbound probe groups are empty")
+	}
+
+	jobs := make(chan []string, len(outboundGroups))
+	for groupIndex, group := range outboundGroups {
+		if len(group) == 0 {
+			return fmt.Errorf("outbound probe group %d is empty", groupIndex)
+		}
+		copied := append([]string(nil), group...)
+		jobs <- copied
+	}
+	close(jobs)
+
+	type completion struct {
+		checked      bool
+		acknowledged chan struct{}
+	}
+	completed := make(chan completion)
+	workerCount := maxConcurrency
+	if workerCount > len(outboundGroups) {
+		workerCount = len(outboundGroups)
+	}
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer workers.Done()
+			for group := range jobs {
+				for sample := 0; sample < samples; sample++ {
+					var members sync.WaitGroup
+					members.Add(len(group))
+					for _, outboundTag := range group {
+						tag := outboundTag
+						go func() {
+							defer members.Done()
+							result := completion{acknowledged: make(chan struct{})}
+							if ctx.Err() != nil {
+								completed <- result
+								<-result.acknowledged
+								return
+							}
+							observer.Check([]string{tag})
+							result.checked = true
+							completed <- result
+							<-result.acknowledged
+						}()
+					}
+					members.Wait()
+				}
+			}
+		}()
+	}
+	go func() {
+		workers.Wait()
+		close(completed)
+	}()
+
+	var callbackErr error
+	for result := range completed {
+		if result.checked && callbackErr == nil && afterProbe != nil {
+			callbackErr = afterProbe()
+		}
+		close(result.acknowledged)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return callbackErr
+}
+
+func outboundProbeSnapshot(
+	inst *core.Instance,
+	balancerTags []string,
+	probeErr error,
+	final bool,
+	handler OutboundProbeHandler,
+) (string, error) {
+	feature := inst.GetFeature(coreextension.ObservatoryType())
+	observer, ok := feature.(coreextension.Observatory)
+	if !ok {
+		return "", errors.New("outbound probe observatory is unavailable")
+	}
+	message, err := observer.GetObservation(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("outbound probe result query failed: %w", err)
+	}
+	result, ok := message.(*coreobservatory.ObservationResult)
+	if !ok {
+		return "", errors.New("unexpected outbound probe result type")
+	}
+
+	statuses := make([]outboundProbeStatus, 0, len(result.GetStatus()))
+	for _, status := range result.GetStatus() {
+		health := status.GetHealthPing()
+		statuses = append(statuses, outboundProbeStatus{
+			OutboundTag:   status.GetOutboundTag(),
+			Alive:         status.GetAlive(),
+			Delay:         status.GetDelay(),
+			LastError:     status.GetLastErrorReason(),
+			Samples:       health.GetAll(),
+			FailedSamples: health.GetFail(),
+			Deviation:     health.GetDeviation(),
+		})
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		return statuses[i].OutboundTag < statuses[j].OutboundTag
+	})
+
+	targets := make(map[string]string)
+	for _, balancerTag := range balancerTags {
+		target, targetErr := firstBalancerPrincipleTarget(inst, balancerTag)
+		if targetErr == nil && target != "" {
+			targets[balancerTag] = target
+		}
+	}
+	if len(targets) == 0 {
+		targets = nil
+	}
+
+	payload := outboundProbeBatchResult{
+		Completed:          final && probeErr == nil,
+		Cancelled:          errors.Is(probeErr, context.Canceled),
+		NetworkUnavailable: final && probeErr == nil && len(statuses) == 0,
+		Results:            statuses,
+		BalancerTargets:    targets,
+	}
+	if probeErr != nil {
+		payload.Error = probeErr.Error()
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("outbound probe result encoding failed: %w", err)
+	}
+	resultJSON := string(encoded)
+	if handler != nil {
+		handler.OnOutboundProbeUpdate(resultJSON)
+	}
+	return resultJSON, nil
+}
+
+func routedBalancerPlanForConfig(config *core.Config) (routedBalancerPlan, error) {
+	hasObservatory := false
+	for _, app := range config.App {
+		if app.Type == "xray.core.app.observatory.Config" ||
+			app.Type == "xray.core.app.observatory.burst.Config" {
+			hasObservatory = true
+			break
+		}
+	}
+	if !hasObservatory {
+		return routedBalancerPlan{}, nil
+	}
+
+	for _, app := range config.App {
+		if app.Type != "xray.app.router.Config" {
+			continue
+		}
+		instance, err := app.GetInstance()
+		if err != nil {
+			return routedBalancerPlan{}, err
+		}
+		routerConfig, ok := instance.(*corerouter.Config)
+		if !ok {
+			return routedBalancerPlan{}, errors.New("unexpected router config type")
+		}
+		for _, rule := range routerConfig.GetRule() {
+			balancerTag := rule.GetBalancingTag()
+			if balancerTag == "" {
+				continue
+			}
+			for _, balancer := range routerConfig.GetBalancingRule() {
+				if balancer.GetTag() == balancerTag {
+					strategy := balancer.GetStrategy()
+					if strategy != "leastPing" && strategy != "leastLoad" {
+						return routedBalancerPlan{}, nil
+					}
+					return routedBalancerPlan{
+						tag:       balancerTag,
+						selectors: append([]string(nil), balancer.GetOutboundSelector()...),
+					}, nil
+				}
+			}
+			return routedBalancerPlan{}, fmt.Errorf("routed balancer %q is not configured", balancerTag)
+		}
+	}
+	return routedBalancerPlan{}, nil
+}
+
+func balancerFeatures(inst *core.Instance) (corerouting.BalancerPrincipleTarget, corerouting.BalancerOverrider, error) {
+	if inst == nil {
+		return nil, nil, errors.New("core instance is nil")
+	}
+	feature := inst.GetFeature(corerouting.RouterType())
+	principle, ok := feature.(corerouting.BalancerPrincipleTarget)
+	if !ok {
+		return nil, nil, errors.New("router does not expose balancer principle targets")
+	}
+	overrider, ok := feature.(corerouting.BalancerOverrider)
+	if !ok {
+		return nil, nil, errors.New("router does not support balancer overrides")
+	}
+	return principle, overrider, nil
+}
+
+func firstBalancerPrincipleTarget(inst *core.Instance, balancerTag string) (string, error) {
+	if balancerTag == "" {
+		return "", nil
+	}
+	if inst == nil {
+		return "", errors.New("core instance is nil")
+	}
+	principle, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
+	if !ok {
+		return "", errors.New("router does not expose balancer principle targets")
+	}
+	targets, err := principle.GetPrincipleTarget(balancerTag)
+	if err != nil {
+		return "", err
+	}
+	for _, target := range targets {
+		if target != "" {
+			return target, nil
+		}
+	}
+	return "", nil
+}
+
+func setBalancerOverride(inst *core.Instance, balancerTag, target string) error {
+	if balancerTag == "" || target == "" {
+		return errors.New("balancer tag and target are required")
+	}
+	manager, ok := inst.GetFeature(coreoutbound.ManagerType()).(coreoutbound.Manager)
+	if !ok || manager.GetHandler(target) == nil {
+		return fmt.Errorf("outbound %q is not present", target)
+	}
+	_, overrider, err := balancerFeatures(inst)
+	if err != nil {
+		return err
+	}
+	return overrider.SetOverrideTarget(balancerTag, target)
+}
+
+func clearBalancerOverride(inst *core.Instance, balancerTag string) error {
+	_, overrider, err := balancerFeatures(inst)
+	if err != nil {
+		return err
+	}
+	return overrider.SetOverrideTarget(balancerTag, "")
+}
+
+func getBalancerOverride(inst *core.Instance, balancerTag string) (string, error) {
+	_, overrider, err := balancerFeatures(inst)
+	if err != nil {
+		return "", err
+	}
+	return overrider.GetOverrideTarget(balancerTag)
+}
+
+func observationResultDeadlineForProbe(probeDeadline time.Duration) (time.Duration, error) {
+	if probeDeadline <= 0 {
+		return 0, errors.New("observatory did not report a valid probe deadline")
+	}
+	return probeDeadline + warmRouteDeadlineGrace, nil
+}
+
+func observationResultDeadline(config *core.Config) (time.Duration, error) {
+	if config == nil {
+		return 0, errors.New("core config is nil")
+	}
+	for _, app := range config.App {
+		instance, err := app.GetInstance()
+		if err != nil {
+			return 0, fmt.Errorf("observatory config inspection failed: %w", err)
+		}
+		switch observatoryConfig := instance.(type) {
+		case *coreobservatoryburst.Config:
+			probeDeadline := defaultObservationDeadline
+			if pingConfig := observatoryConfig.GetPingConfig(); pingConfig != nil && pingConfig.GetTimeout() > 0 {
+				probeDeadline = time.Duration(pingConfig.GetTimeout())
+			}
+			return observationResultDeadlineForProbe(probeDeadline)
+		case *coreobservatory.Config:
+			// The upstream standard Observatory uses a five-second HTTP client
+			// timeout for each concurrent initial probe.
+			return observationResultDeadlineForProbe(defaultObservationDeadline)
+		}
+	}
+	return 0, errors.New("core config does not contain an observatory")
+}
+
+func watchBalancerTargetChanges(inst *core.Instance, balancerTag string, handler CoreCallbackHandler) (func(), error) {
+	return watchBalancerTargetChangesWithInterval(inst, balancerTag, handler, balancerTargetPollInterval)
+}
+
+func watchBalancerTargetChangesWithInterval(
+	inst *core.Instance,
+	balancerTag string,
+	handler CoreCallbackHandler,
+	pollInterval time.Duration,
+) (func(), error) {
+	if balancerTag == "" {
+		return func() {}, nil
+	}
+	if inst == nil {
+		return nil, errors.New("core instance is nil")
+	}
+	observer := inst.GetFeature(coreextension.ObservatoryType())
+	if _, ok := observer.(coreextension.Observatory); !ok {
+		return nil, errors.New("observatory is unavailable")
+	}
+	if _, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget); !ok {
+		return nil, errors.New("router does not expose balancer principle targets")
+	}
+	if pollInterval <= 0 {
+		return nil, errors.New("balancer target poll interval must be positive")
+	}
+
+	watchCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+		lastTarget := ""
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			lastTarget = handleBalancerTargetChange(inst, balancerTag, lastTarget, handler)
+		}
+	}()
+
+	var stopOnce sync.Once
+	return func() {
+		stopOnce.Do(func() {
+			cancel()
+			<-done
+		})
+	}, nil
+}
+
+func handleBalancerTargetChange(
+	inst *core.Instance,
+	balancerTag, lastTarget string,
+	handler CoreCallbackHandler,
+) string {
+	target, err := firstBalancerPrincipleTarget(inst, balancerTag)
+	if err != nil || target == "" {
+		return lastTarget
+	}
+	if target != lastTarget && handler != nil {
+		if status := handler.OnBalancerTargetChanged(balancerTag, target); status != 0 {
+			log.Printf("fresh balancer target %q was not acknowledged (status %d); retaining warm route", target, status)
+			return lastTarget
+		}
+	}
+	if override, err := getBalancerOverride(inst, balancerTag); err != nil {
+		log.Printf("failed to inspect warm route before handoff to %q: %v", target, err)
+	} else if override != "" {
+		if err := clearBalancerOverride(inst, balancerTag); err != nil {
+			log.Printf("failed to release warm route %q: %v", override, err)
+		} else {
+			log.Printf("handed off warm route %q to fresh observatory target %q", override, target)
+		}
+	}
+	return target
+}
+
+// reportWarmRouteReadinessDeadline deliberately does not clear the override.
+// Upstream probe timeouts are estimates for when a result should be ready, not
+// proof that the balancer has a viable replacement. The target watcher remains
+// responsible for the eventual acknowledged handoff.
+func reportWarmRouteReadinessDeadline(
+	inst *core.Instance,
+	balancerTag, warmTarget string,
+	expectedWithin time.Duration,
+) {
+	override, err := getBalancerOverride(inst, balancerTag)
+	if err != nil || override != warmTarget {
+		return
+	}
+	target, targetErr := firstBalancerPrincipleTarget(inst, balancerTag)
+	switch {
+	case targetErr != nil:
+		log.Printf(
+			"warm route %q remains active after %v because the fresh target query failed: %v",
+			warmTarget,
+			expectedWithin,
+			targetErr,
+		)
+	case target == "":
+		log.Printf(
+			"warm route %q remains active after %v because observatory has no fresh target",
+			warmTarget,
+			expectedWithin,
+		)
+	default:
+		log.Printf(
+			"warm route %q remains active until the target watcher completes handoff to %q",
+			warmTarget,
+			target,
+		)
+	}
 }
 
 // CheckVersionX returns the library and Xray versions
@@ -244,6 +1025,14 @@ func ReconcileBrowserDialer(dialerAddr string) {
 
 // doShutdown shuts down the Xray instance and cleans up resources
 func (x *CoreController) doShutdown() {
+	if x.warmRouteTimer != nil {
+		x.warmRouteTimer.Stop()
+		x.warmRouteTimer = nil
+	}
+	if x.stopTargetWatch != nil {
+		x.stopTargetWatch()
+		x.stopTargetWatch = nil
+	}
 	if x.coreInstance != nil {
 		if err := x.coreInstance.Close(); err != nil {
 			log.Printf("core shutdown error: %v", err)
@@ -255,24 +1044,70 @@ func (x *CoreController) doShutdown() {
 }
 
 // doStartLoop sets up and starts the Xray core
-func (x *CoreController) doStartLoop(configContent string) error {
+func (x *CoreController) doStartLoop(configContent, warmBalancerTag, warmTarget string) error {
 	log.Println("initializing core...")
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
+	plan, err := routedBalancerPlanForConfig(config)
+	if err != nil {
+		return fmt.Errorf("route inspection failed: %w", err)
+	}
 
-	x.coreInstance, err = core.New(config)
+	instance, err := core.New(config)
 	if err != nil {
 		return fmt.Errorf("core init failed: %w", err)
 	}
-	x.statsManager = x.coreInstance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	stopTargetWatch, err := watchBalancerTargetChanges(instance, plan.tag, x.CallbackHandler)
+	if err != nil {
+		_ = instance.Close()
+		return fmt.Errorf("balancer target watch failed: %w", err)
+	}
+	warmRouteApplied := false
+	warmRouteLifetime := time.Duration(0)
+	if warmTarget != "" {
+		warmRouteLifetime, err = observationResultDeadline(config)
+		if err != nil {
+			log.Printf("warm route %q was not applied: %v", warmTarget, err)
+		} else if err := setBalancerOverride(instance, warmBalancerTag, warmTarget); err != nil {
+			log.Printf("warm route %q was not applied: %v", warmTarget, err)
+		} else {
+			log.Printf(
+				"using warm route %q while observatory starts; expecting a fresh target within %v",
+				warmTarget,
+				warmRouteLifetime,
+			)
+			warmRouteApplied = true
+		}
+	}
 
 	log.Println("starting core...")
-	x.IsRunning = true
-	if err := x.coreInstance.Start(); err != nil {
-		x.IsRunning = false
+	if err := instance.Start(); err != nil {
+		stopTargetWatch()
+		_ = instance.Close()
 		return fmt.Errorf("startup failed: %w", err)
+	}
+
+	x.coreInstance = instance
+	x.stopTargetWatch = stopTargetWatch
+	x.statsManager = instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	x.IsRunning = true
+	if warmRouteApplied {
+		x.warmRouteTimer = time.AfterFunc(warmRouteLifetime, func() {
+			x.coreMutex.Lock()
+			defer x.coreMutex.Unlock()
+			x.warmRouteTimer = nil
+			if !x.IsRunning || x.coreInstance != instance {
+				return
+			}
+			reportWarmRouteReadinessDeadline(
+				instance,
+				warmBalancerTag,
+				warmTarget,
+				warmRouteLifetime,
+			)
+		})
 	}
 
 	x.CallbackHandler.Startup()
@@ -284,6 +1119,10 @@ func (x *CoreController) doStartLoop(configContent string) error {
 
 // measureInstDelay measures the delay for an instance to a given URL
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
+	return measureInstDelayWithOptions(ctx, inst, url, 12*time.Second, 2)
+}
+
+func measureInstDelayWithOptions(ctx context.Context, inst *core.Instance, url string, timeout time.Duration, attempts int) (int64, error) {
 	if inst == nil {
 		return -1, errors.New("core instance is nil")
 	}
@@ -302,7 +1141,7 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 
 	client := &http.Client{
 		Transport: tr,
-		Timeout:   12 * time.Second,
+		Timeout:   timeout,
 	}
 
 	if url == "" {
@@ -318,8 +1157,6 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 	success := false
 	var lastErr error
 
-	// Add exception handling and increase retry attempts
-	const attempts = 2
 	for i := 0; i < attempts; i++ {
 		select {
 		case <-ctx.Done():
