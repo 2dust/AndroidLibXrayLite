@@ -21,6 +21,7 @@ import (
 	corefilesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	corerouting "github.com/xtls/xray-core/features/routing"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -199,6 +200,19 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	return measureInstDelay(ctx, x.coreInstance, url)
 }
 
+// GetBalancerPrincipleTarget returns the balancer strategy's current
+// first-choice outbound. An empty result means the running profile has no
+// compatible balancer or the observatory has not selected a viable target yet.
+func (x *CoreController) GetBalancerPrincipleTarget(balancerTag string) (string, error) {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if !x.IsRunning || x.coreInstance == nil {
+		return "", nil
+	}
+	return firstBalancerPrincipleTarget(x.coreInstance, balancerTag)
+}
+
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
@@ -368,6 +382,29 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 		return -1, lastErr
 	}
 	return minDuration, nil
+}
+
+func firstBalancerPrincipleTarget(inst *core.Instance, balancerTag string) (string, error) {
+	if balancerTag == "" {
+		return "", nil
+	}
+	if inst == nil {
+		return "", errors.New("core instance is nil")
+	}
+	principle, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
+	if !ok {
+		return "", errors.New("router does not expose balancer principle targets")
+	}
+	targets, err := principle.GetPrincipleTarget(balancerTag)
+	if err != nil {
+		return "", err
+	}
+	for _, target := range targets {
+		if target != "" {
+			return target, nil
+		}
+	}
+	return "", nil
 }
 
 // Log writer implementation
