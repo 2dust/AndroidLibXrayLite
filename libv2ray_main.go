@@ -35,7 +35,7 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 38 // Library version, update here only
+	libVersion           = 39 // Library version, update here only
 )
 
 // CoreController represents a controller for managing Xray core instance lifecycle
@@ -288,6 +288,10 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 		return -1, errors.New("core instance is nil")
 	}
 
+	if url == "" {
+		url = "https://www.google.com/generate_204"
+	}
+
 	tr := &http.Transport{
 		TLSHandshakeTimeout: 6 * time.Second,
 		DisableKeepAlives:   false,
@@ -305,18 +309,12 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 		Timeout:   12 * time.Second,
 	}
 
-	if url == "" {
-		url = "https://www.google.com/generate_204"
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return -1, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
 	var minDuration int64 = -1
 	success := false
 	var lastErr error
+
+	// Close idle connections to ensure the temporary instance can be closed safely
+	defer tr.CloseIdleConnections()
 
 	// Add exception handling and increase retry attempts
 	const attempts = 2
@@ -332,6 +330,12 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 			// Continue execution
 		}
 
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to create HTTP request: %w", err)
+			continue
+		}
+
 		start := time.Now()
 		resp, err := client.Do(req)
 		if err != nil {
@@ -339,20 +343,16 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 			continue
 		}
 
-		// Ensure response body is closed
-		defer func(resp *http.Response) {
-			if resp != nil && resp.Body != nil {
-				resp.Body.Close()
-			}
-		}(resp)
+		// Read and close body immediately to allow connection reuse for the next attempt
+		_, err = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 			lastErr = fmt.Errorf("invalid status: %s", resp.Status)
 			continue
 		}
 
-		// Handle possible errors when reading response body
-		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		if err != nil {
 			lastErr = fmt.Errorf("failed to read response body: %w", err)
 			continue
 		}
