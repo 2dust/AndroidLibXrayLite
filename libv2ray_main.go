@@ -39,35 +39,35 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 40 // Library version, update here only
+	libVersion           = 41 // Library version, update here only
 )
 
-// OutboundProbeHandler receives one compact update for the affected UI group.
+// ProbeHandler receives one compact update for the affected UI group.
 // Calls are serialized even though the underlying checks run concurrently.
-type OutboundProbeHandler interface {
-	OnOutboundProbeResult(groupID string, delay int64, alive, completed bool) int
+type ProbeHandler interface {
+	OnProbeResult(groupID string, delay int64, alive, completed bool) int
 }
 
-type outboundProbeGroup struct {
+type probeGroup struct {
 	GUID         string   `json:"guid"`
 	OutboundTags []string `json:"outboundTags"`
 	BalancerTag  string   `json:"balancerTag"`
 }
 
-// OutboundProbeController owns one finite probe batch. v2rayNG runs it in a
+// ProbeController owns one finite probe batch. v2rayNG runs it in a
 // disposable process so Xray's process-wide native state cannot overlap the
 // long-running VPN core or a later test batch.
-type OutboundProbeController struct {
+type ProbeController struct {
 	access sync.Mutex
 	cancel context.CancelFunc
 	used   bool
 }
 
-func NewOutboundProbeController() *OutboundProbeController {
-	return &OutboundProbeController{}
+func NewProbeController() *ProbeController {
+	return &ProbeController{}
 }
 
-func (c *OutboundProbeController) Cancel() {
+func (c *ProbeController) Cancel() {
 	c.access.Lock()
 	cancel := c.cancel
 	c.access.Unlock()
@@ -269,28 +269,27 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 }
 
 // Probe runs all UI delay-test groups through one short-lived Xray instance.
-// maxConcurrency limits active UI profiles; candidates inside one policy group
-// are checked together so one unresponsive candidate cannot hide faster results.
-func (c *OutboundProbeController) Probe(
+// maxConcurrency limits active Observatory checks across every group member.
+func (c *ProbeController) Probe(
 	configContent, groupsJSON string,
 	maxConcurrency, samples int32,
-	handler OutboundProbeHandler,
+	handler ProbeHandler,
 ) error {
-	groups, err := decodeOutboundProbeGroups(groupsJSON)
+	groups, err := decodeProbeGroups(groupsJSON)
 	if err != nil {
 		return err
 	}
 	if maxConcurrency <= 0 {
-		return errors.New("outbound probe concurrency must be positive")
+		return errors.New("probe concurrency must be positive")
 	}
 	if samples <= 0 {
-		return errors.New("outbound probe sample count must be positive")
+		return errors.New("probe sample count must be positive")
 	}
 
 	c.access.Lock()
 	if c.used {
 		c.access.Unlock()
-		return errors.New("outbound probe controller is single-use")
+		return errors.New("probe controller is single-use")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c.used = true
@@ -305,30 +304,30 @@ func (c *OutboundProbeController) Probe(
 
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
-		return fmt.Errorf("outbound probe config load failed: %w", err)
+		return fmt.Errorf("probe config load failed: %w", err)
 	}
 	config.Inbound = nil
 
 	inst, err := core.New(config)
 	if err != nil {
-		return fmt.Errorf("outbound probe instance creation failed: %w", err)
+		return fmt.Errorf("probe instance creation failed: %w", err)
 	}
 	defer inst.Close()
 
 	feature := inst.GetFeature(coreextension.ObservatoryType())
 	burst, ok := feature.(coreextension.BurstObservatory)
 	if !ok {
-		return errors.New("outbound probe config does not contain a burst observatory")
+		return errors.New("probe config does not contain a burst observatory")
 	}
 	observer, ok := feature.(coreextension.Observatory)
 	if !ok {
-		return errors.New("outbound probe observatory does not expose results")
+		return errors.New("probe observatory does not expose results")
 	}
 	if err := inst.Start(); err != nil {
-		return fmt.Errorf("outbound probe startup failed: %w", err)
+		return fmt.Errorf("probe startup failed: %w", err)
 	}
 
-	return runOutboundProbeGroups(
+	return runProbeGroups(
 		ctx,
 		inst,
 		burst,
@@ -340,34 +339,34 @@ func (c *OutboundProbeController) Probe(
 	)
 }
 
-func decodeOutboundProbeGroups(encoded string) ([]outboundProbeGroup, error) {
-	var groups []outboundProbeGroup
+func decodeProbeGroups(encoded string) ([]probeGroup, error) {
+	var groups []probeGroup
 	if err := json.Unmarshal([]byte(encoded), &groups); err != nil {
-		return nil, fmt.Errorf("outbound probe groups are invalid: %w", err)
+		return nil, fmt.Errorf("probe groups are invalid: %w", err)
 	}
 	if len(groups) == 0 {
-		return nil, errors.New("outbound probe groups are empty")
+		return nil, errors.New("probe groups are empty")
 	}
 
 	seenGroups := make(map[string]struct{})
 	seenTags := make(map[string]struct{})
 	for groupIndex, group := range groups {
 		if strings.TrimSpace(group.GUID) == "" {
-			return nil, fmt.Errorf("outbound probe group %d has no ID", groupIndex)
+			return nil, fmt.Errorf("probe group %d has no ID", groupIndex)
 		}
 		if _, exists := seenGroups[group.GUID]; exists {
-			return nil, fmt.Errorf("outbound probe group ID %q is duplicated", group.GUID)
+			return nil, fmt.Errorf("probe group ID %q is duplicated", group.GUID)
 		}
 		seenGroups[group.GUID] = struct{}{}
 		if len(group.OutboundTags) == 0 {
-			return nil, fmt.Errorf("outbound probe group %d is empty", groupIndex)
+			return nil, fmt.Errorf("probe group %d is empty", groupIndex)
 		}
 		for _, tag := range group.OutboundTags {
 			if strings.TrimSpace(tag) == "" {
-				return nil, fmt.Errorf("outbound probe group %d contains an empty tag", groupIndex)
+				return nil, fmt.Errorf("probe group %d contains an empty tag", groupIndex)
 			}
 			if _, exists := seenTags[tag]; exists {
-				return nil, fmt.Errorf("outbound probe tag %q is duplicated", tag)
+				return nil, fmt.Errorf("probe tag %q is duplicated", tag)
 			}
 			seenTags[tag] = struct{}{}
 		}
@@ -375,74 +374,77 @@ func decodeOutboundProbeGroups(encoded string) ([]outboundProbeGroup, error) {
 	return groups, nil
 }
 
-type indexedOutboundProbeGroup struct {
-	index int
-	group outboundProbeGroup
+type probeTarget struct {
+	groupIndex  int
+	outboundTag string
 }
 
-type outboundProbeCompletion struct {
+type probeCompletion struct {
 	groupIndex  int
 	outboundTag string
 	acknowledge chan struct{}
 }
 
-func runOutboundProbeGroups(
+func runProbeGroups(
 	ctx context.Context,
 	inst *core.Instance,
 	burst coreextension.BurstObservatory,
 	observer coreextension.Observatory,
-	groups []outboundProbeGroup,
+	groups []probeGroup,
 	maxConcurrency, samples int,
-	handler OutboundProbeHandler,
+	handler ProbeHandler,
 ) error {
-	jobs := make(chan indexedOutboundProbeGroup, len(groups))
-	for index, group := range groups {
-		jobs <- indexedOutboundProbeGroup{index: index, group: group}
+	targetCount := 0
+	maxGroupSize := 0
+	for _, group := range groups {
+		targetCount += len(group.OutboundTags)
+		if len(group.OutboundTags) > maxGroupSize {
+			maxGroupSize = len(group.OutboundTags)
+		}
+	}
+	jobs := make(chan probeTarget, targetCount)
+	// Interleave groups so a large policy group cannot put every other profile
+	// behind all of its candidates when concurrency is limited.
+	for memberIndex := 0; memberIndex < maxGroupSize; memberIndex++ {
+		for groupIndex, group := range groups {
+			if memberIndex < len(group.OutboundTags) {
+				jobs <- probeTarget{groupIndex, group.OutboundTags[memberIndex]}
+			}
+		}
 	}
 	close(jobs)
 
-	completed := make(chan outboundProbeCompletion)
+	completed := make(chan probeCompletion)
 	workerCount := maxConcurrency
-	if workerCount > len(groups) {
-		workerCount = len(groups)
+	if workerCount > targetCount {
+		workerCount = targetCount
 	}
 	var workers sync.WaitGroup
 	workers.Add(workerCount)
 	for range workerCount {
 		go func() {
 			defer workers.Done()
-			for job := range jobs {
+			for target := range jobs {
 				for range samples {
 					if ctx.Err() != nil {
 						return
 					}
-					var members sync.WaitGroup
-					members.Add(len(job.group.OutboundTags))
-					for _, outboundTag := range job.group.OutboundTags {
-						tag := outboundTag
-						go func() {
-							defer members.Done()
-							if ctx.Err() != nil {
-								return
-							}
-							burst.Check([]string{tag})
-							completion := outboundProbeCompletion{
-								groupIndex:  job.index,
-								outboundTag: tag,
-								acknowledge: make(chan struct{}),
-							}
-							select {
-							case completed <- completion:
-							case <-ctx.Done():
-								return
-							}
-							select {
-							case <-completion.acknowledge:
-							case <-ctx.Done():
-							}
-						}()
+					burst.Check([]string{target.outboundTag})
+					completion := probeCompletion{
+						groupIndex:  target.groupIndex,
+						outboundTag: target.outboundTag,
+						acknowledge: make(chan struct{}),
 					}
-					members.Wait()
+					select {
+					case completed <- completion:
+					case <-ctx.Done():
+						return
+					}
+					select {
+					case <-completion.acknowledge:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}()
@@ -459,9 +461,9 @@ func runOutboundProbeGroups(
 	for completion := range completed {
 		counts[completion.groupIndex][completion.outboundTag]++
 		group := groups[completion.groupIndex]
-		_, delay, alive, err := currentOutboundProbeResult(inst, observer, group)
+		_, delay, alive, err := currentProbeResult(inst, observer, group)
 		if err != nil {
-			log.Printf("outbound probe result unavailable for group %d: %v", completion.groupIndex, err)
+			log.Printf("probe result unavailable for group %d: %v", completion.groupIndex, err)
 		}
 		groupCompleted := true
 		for _, tag := range group.OutboundTags {
@@ -471,7 +473,7 @@ func runOutboundProbeGroups(
 			}
 		}
 		if handler != nil {
-			handler.OnOutboundProbeResult(
+			handler.OnProbeResult(
 				group.GUID,
 				delay,
 				alive,
@@ -483,10 +485,10 @@ func runOutboundProbeGroups(
 	return ctx.Err()
 }
 
-func currentOutboundProbeResult(
+func currentProbeResult(
 	inst *core.Instance,
 	observer coreextension.Observatory,
-	group outboundProbeGroup,
+	group probeGroup,
 ) (string, int64, bool, error) {
 	target := group.OutboundTags[0]
 	if group.BalancerTag != "" {
@@ -516,7 +518,7 @@ func currentOutboundProbeResult(
 	}
 	result, ok := message.(*coreobservatory.ObservationResult)
 	if !ok {
-		return target, -1, false, errors.New("unexpected outbound probe result type")
+		return target, -1, false, errors.New("unexpected probe result type")
 	}
 	for _, status := range result.GetStatus() {
 		if status.GetOutboundTag() == target {
