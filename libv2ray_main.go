@@ -39,7 +39,7 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 41 // Library version, update here only
+	libVersion           = 42 // Library version, update here only
 )
 
 // ProbeHandler receives one compact update for the affected UI group.
@@ -269,10 +269,11 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 }
 
 // Probe runs all UI delay-test groups through one short-lived Xray instance.
-// maxConcurrency limits active Observatory checks across every group member.
+// Every target is checked once. maxConcurrency limits active Observatory
+// checks across every group member.
 func (c *ProbeController) Probe(
 	configContent, groupsJSON string,
-	maxConcurrency, samples int32,
+	maxConcurrency int32,
 	handler ProbeHandler,
 ) error {
 	groups, err := decodeProbeGroups(groupsJSON)
@@ -281,9 +282,6 @@ func (c *ProbeController) Probe(
 	}
 	if maxConcurrency <= 0 {
 		return errors.New("probe concurrency must be positive")
-	}
-	if samples <= 0 {
-		return errors.New("probe sample count must be positive")
 	}
 
 	c.access.Lock()
@@ -334,7 +332,6 @@ func (c *ProbeController) Probe(
 		observer,
 		groups,
 		int(maxConcurrency),
-		int(samples),
 		handler,
 	)
 }
@@ -381,7 +378,6 @@ type probeTarget struct {
 
 type probeCompletion struct {
 	groupIndex  int
-	outboundTag string
 	acknowledge chan struct{}
 }
 
@@ -391,7 +387,7 @@ func runProbeGroups(
 	burst coreextension.BurstObservatory,
 	observer coreextension.Observatory,
 	groups []probeGroup,
-	maxConcurrency, samples int,
+	maxConcurrency int,
 	handler ProbeHandler,
 ) error {
 	targetCount := 0
@@ -425,26 +421,23 @@ func runProbeGroups(
 		go func() {
 			defer workers.Done()
 			for target := range jobs {
-				for range samples {
-					if ctx.Err() != nil {
-						return
-					}
-					burst.Check([]string{target.outboundTag})
-					completion := probeCompletion{
-						groupIndex:  target.groupIndex,
-						outboundTag: target.outboundTag,
-						acknowledge: make(chan struct{}),
-					}
-					select {
-					case completed <- completion:
-					case <-ctx.Done():
-						return
-					}
-					select {
-					case <-completion.acknowledge:
-					case <-ctx.Done():
-						return
-					}
+				if ctx.Err() != nil {
+					return
+				}
+				burst.Check([]string{target.outboundTag})
+				completion := probeCompletion{
+					groupIndex:  target.groupIndex,
+					acknowledge: make(chan struct{}),
+				}
+				select {
+				case completed <- completion:
+				case <-ctx.Done():
+					return
+				}
+				select {
+				case <-completion.acknowledge:
+				case <-ctx.Done():
+					return
 				}
 			}
 		}()
@@ -454,30 +447,23 @@ func runProbeGroups(
 		close(completed)
 	}()
 
-	counts := make([]map[string]int, len(groups))
+	remaining := make([]int, len(groups))
 	for index, group := range groups {
-		counts[index] = make(map[string]int, len(group.OutboundTags))
+		remaining[index] = len(group.OutboundTags)
 	}
 	for completion := range completed {
-		counts[completion.groupIndex][completion.outboundTag]++
+		remaining[completion.groupIndex]--
 		group := groups[completion.groupIndex]
 		_, delay, alive, err := currentProbeResult(inst, observer, group)
 		if err != nil {
 			log.Printf("probe result unavailable for group %d: %v", completion.groupIndex, err)
-		}
-		groupCompleted := true
-		for _, tag := range group.OutboundTags {
-			if counts[completion.groupIndex][tag] < samples {
-				groupCompleted = false
-				break
-			}
 		}
 		if handler != nil {
 			handler.OnProbeResult(
 				group.GUID,
 				delay,
 				alive,
-				groupCompleted,
+				remaining[completion.groupIndex] == 0,
 			)
 		}
 		close(completion.acknowledge)
