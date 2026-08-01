@@ -2,6 +2,7 @@ package libv2ray
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,11 +17,14 @@ import (
 	"time"
 
 	coreapplog "github.com/xtls/xray-core/app/log"
+	coreobservatory "github.com/xtls/xray-core/app/observatory"
 	corecommlog "github.com/xtls/xray-core/common/log"
 	corenet "github.com/xtls/xray-core/common/net"
 	corefilesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	coreextension "github.com/xtls/xray-core/features/extension"
+	corerouting "github.com/xtls/xray-core/features/routing"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -35,8 +39,42 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 39 // Library version, update here only
+	libVersion           = 40 // Library version, update here only
 )
+
+// OutboundProbeHandler receives one compact update for the affected UI group.
+// Calls are serialized even though the underlying checks run concurrently.
+type OutboundProbeHandler interface {
+	OnOutboundProbeResult(groupID string, delay int64, alive, completed bool) int
+}
+
+type outboundProbeGroup struct {
+	GUID         string   `json:"guid"`
+	OutboundTags []string `json:"outboundTags"`
+	BalancerTag  string   `json:"balancerTag"`
+}
+
+// OutboundProbeController owns one finite probe batch. v2rayNG runs it in a
+// disposable process so Xray's process-wide native state cannot overlap the
+// long-running VPN core or a later test batch.
+type OutboundProbeController struct {
+	access sync.Mutex
+	cancel context.CancelFunc
+	used   bool
+}
+
+func NewOutboundProbeController() *OutboundProbeController {
+	return &OutboundProbeController{}
+}
+
+func (c *OutboundProbeController) Cancel() {
+	c.access.Lock()
+	cancel := c.cancel
+	c.access.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
 
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
@@ -228,6 +266,267 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	}
 	defer inst.Close()
 	return measureInstDelay(context.Background(), inst, url)
+}
+
+// Probe runs all UI delay-test groups through one short-lived Xray instance.
+// maxConcurrency limits active UI profiles; candidates inside one policy group
+// are checked together so one unresponsive candidate cannot hide faster results.
+func (c *OutboundProbeController) Probe(
+	configContent, groupsJSON string,
+	maxConcurrency, samples int32,
+	handler OutboundProbeHandler,
+) error {
+	groups, err := decodeOutboundProbeGroups(groupsJSON)
+	if err != nil {
+		return err
+	}
+	if maxConcurrency <= 0 {
+		return errors.New("outbound probe concurrency must be positive")
+	}
+	if samples <= 0 {
+		return errors.New("outbound probe sample count must be positive")
+	}
+
+	c.access.Lock()
+	if c.used {
+		c.access.Unlock()
+		return errors.New("outbound probe controller is single-use")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.used = true
+	c.cancel = cancel
+	c.access.Unlock()
+	defer func() {
+		cancel()
+		c.access.Lock()
+		c.cancel = nil
+		c.access.Unlock()
+	}()
+
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+	if err != nil {
+		return fmt.Errorf("outbound probe config load failed: %w", err)
+	}
+	config.Inbound = nil
+
+	inst, err := core.New(config)
+	if err != nil {
+		return fmt.Errorf("outbound probe instance creation failed: %w", err)
+	}
+	defer inst.Close()
+
+	feature := inst.GetFeature(coreextension.ObservatoryType())
+	burst, ok := feature.(coreextension.BurstObservatory)
+	if !ok {
+		return errors.New("outbound probe config does not contain a burst observatory")
+	}
+	observer, ok := feature.(coreextension.Observatory)
+	if !ok {
+		return errors.New("outbound probe observatory does not expose results")
+	}
+	if err := inst.Start(); err != nil {
+		return fmt.Errorf("outbound probe startup failed: %w", err)
+	}
+
+	return runOutboundProbeGroups(
+		ctx,
+		inst,
+		burst,
+		observer,
+		groups,
+		int(maxConcurrency),
+		int(samples),
+		handler,
+	)
+}
+
+func decodeOutboundProbeGroups(encoded string) ([]outboundProbeGroup, error) {
+	var groups []outboundProbeGroup
+	if err := json.Unmarshal([]byte(encoded), &groups); err != nil {
+		return nil, fmt.Errorf("outbound probe groups are invalid: %w", err)
+	}
+	if len(groups) == 0 {
+		return nil, errors.New("outbound probe groups are empty")
+	}
+
+	seenGroups := make(map[string]struct{})
+	seenTags := make(map[string]struct{})
+	for groupIndex, group := range groups {
+		if strings.TrimSpace(group.GUID) == "" {
+			return nil, fmt.Errorf("outbound probe group %d has no ID", groupIndex)
+		}
+		if _, exists := seenGroups[group.GUID]; exists {
+			return nil, fmt.Errorf("outbound probe group ID %q is duplicated", group.GUID)
+		}
+		seenGroups[group.GUID] = struct{}{}
+		if len(group.OutboundTags) == 0 {
+			return nil, fmt.Errorf("outbound probe group %d is empty", groupIndex)
+		}
+		for _, tag := range group.OutboundTags {
+			if strings.TrimSpace(tag) == "" {
+				return nil, fmt.Errorf("outbound probe group %d contains an empty tag", groupIndex)
+			}
+			if _, exists := seenTags[tag]; exists {
+				return nil, fmt.Errorf("outbound probe tag %q is duplicated", tag)
+			}
+			seenTags[tag] = struct{}{}
+		}
+	}
+	return groups, nil
+}
+
+type indexedOutboundProbeGroup struct {
+	index int
+	group outboundProbeGroup
+}
+
+type outboundProbeCompletion struct {
+	groupIndex  int
+	outboundTag string
+	acknowledge chan struct{}
+}
+
+func runOutboundProbeGroups(
+	ctx context.Context,
+	inst *core.Instance,
+	burst coreextension.BurstObservatory,
+	observer coreextension.Observatory,
+	groups []outboundProbeGroup,
+	maxConcurrency, samples int,
+	handler OutboundProbeHandler,
+) error {
+	jobs := make(chan indexedOutboundProbeGroup, len(groups))
+	for index, group := range groups {
+		jobs <- indexedOutboundProbeGroup{index: index, group: group}
+	}
+	close(jobs)
+
+	completed := make(chan outboundProbeCompletion)
+	workerCount := maxConcurrency
+	if workerCount > len(groups) {
+		workerCount = len(groups)
+	}
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for job := range jobs {
+				for range samples {
+					if ctx.Err() != nil {
+						return
+					}
+					var members sync.WaitGroup
+					members.Add(len(job.group.OutboundTags))
+					for _, outboundTag := range job.group.OutboundTags {
+						tag := outboundTag
+						go func() {
+							defer members.Done()
+							if ctx.Err() != nil {
+								return
+							}
+							burst.Check([]string{tag})
+							completion := outboundProbeCompletion{
+								groupIndex:  job.index,
+								outboundTag: tag,
+								acknowledge: make(chan struct{}),
+							}
+							select {
+							case completed <- completion:
+							case <-ctx.Done():
+								return
+							}
+							select {
+							case <-completion.acknowledge:
+							case <-ctx.Done():
+							}
+						}()
+					}
+					members.Wait()
+				}
+			}
+		}()
+	}
+	go func() {
+		workers.Wait()
+		close(completed)
+	}()
+
+	counts := make([]map[string]int, len(groups))
+	for index, group := range groups {
+		counts[index] = make(map[string]int, len(group.OutboundTags))
+	}
+	for completion := range completed {
+		counts[completion.groupIndex][completion.outboundTag]++
+		group := groups[completion.groupIndex]
+		_, delay, alive, err := currentOutboundProbeResult(inst, observer, group)
+		if err != nil {
+			log.Printf("outbound probe result unavailable for group %d: %v", completion.groupIndex, err)
+		}
+		groupCompleted := true
+		for _, tag := range group.OutboundTags {
+			if counts[completion.groupIndex][tag] < samples {
+				groupCompleted = false
+				break
+			}
+		}
+		if handler != nil {
+			handler.OnOutboundProbeResult(
+				group.GUID,
+				delay,
+				alive,
+				groupCompleted,
+			)
+		}
+		close(completion.acknowledge)
+	}
+	return ctx.Err()
+}
+
+func currentOutboundProbeResult(
+	inst *core.Instance,
+	observer coreextension.Observatory,
+	group outboundProbeGroup,
+) (string, int64, bool, error) {
+	target := group.OutboundTags[0]
+	if group.BalancerTag != "" {
+		principle, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
+		if !ok {
+			return "", -1, false, errors.New("router does not expose balancer principle targets")
+		}
+		targets, err := principle.GetPrincipleTarget(group.BalancerTag)
+		if err != nil {
+			return "", -1, false, err
+		}
+		target = ""
+		for _, candidate := range targets {
+			if candidate != "" {
+				target = candidate
+				break
+			}
+		}
+	}
+	if target == "" {
+		return "", -1, false, nil
+	}
+
+	message, err := observer.GetObservation(context.Background())
+	if err != nil {
+		return target, -1, false, err
+	}
+	result, ok := message.(*coreobservatory.ObservationResult)
+	if !ok {
+		return target, -1, false, errors.New("unexpected outbound probe result type")
+	}
+	for _, status := range result.GetStatus() {
+		if status.GetOutboundTag() == target {
+			if !status.GetAlive() {
+				return target, -1, false, nil
+			}
+			return target, status.GetDelay(), true, nil
+		}
+	}
+	return target, -1, false, nil
 }
 
 // CheckVersionX returns the library and Xray versions
