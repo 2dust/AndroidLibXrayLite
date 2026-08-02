@@ -39,10 +39,10 @@ const (
 	xudpBaseKey          = "xray.xudp.basekey"
 	tunFdKey             = "xray.tun.fd"
 	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 42 // Library version, update here only
+	libVersion           = 43 // Library version, update here only
 )
 
-// ProbeHandler receives one compact update for the affected UI group.
+// ProbeHandler receives one compact update for the affected profile group.
 // Calls are serialized even though the underlying checks run concurrently.
 type ProbeHandler interface {
 	OnProbeResult(groupID string, delay int64, alive, completed bool) int
@@ -54,13 +54,10 @@ type probeGroup struct {
 	BalancerTag  string   `json:"balancerTag"`
 }
 
-// ProbeController owns one finite probe batch. v2rayNG runs it in a
-// disposable process so Xray's process-wide native state cannot overlap the
-// long-running VPN core or a later test batch.
+// ProbeController owns one cancellable probe batch.
 type ProbeController struct {
 	access sync.Mutex
 	cancel context.CancelFunc
-	used   bool
 }
 
 func NewProbeController() *ProbeController {
@@ -268,7 +265,7 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	return measureInstDelay(context.Background(), inst, url)
 }
 
-// Probe runs all UI delay-test groups through one short-lived Xray instance.
+// Probe runs all delay-test groups through one short-lived Xray instance.
 // Every target is checked once. maxConcurrency limits active Observatory
 // checks across every group member.
 func (c *ProbeController) Probe(
@@ -276,29 +273,16 @@ func (c *ProbeController) Probe(
 	maxConcurrency int32,
 	handler ProbeHandler,
 ) error {
-	groups, err := decodeProbeGroups(groupsJSON)
-	if err != nil {
-		return err
-	}
-	if maxConcurrency <= 0 {
-		return errors.New("probe concurrency must be positive")
+	var groups []probeGroup
+	if err := json.Unmarshal([]byte(groupsJSON), &groups); err != nil {
+		return fmt.Errorf("probe groups are invalid: %w", err)
 	}
 
 	c.access.Lock()
-	if c.used {
-		c.access.Unlock()
-		return errors.New("probe controller is single-use")
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c.used = true
 	c.cancel = cancel
 	c.access.Unlock()
-	defer func() {
-		cancel()
-		c.access.Lock()
-		c.cancel = nil
-		c.access.Unlock()
-	}()
+	defer cancel()
 
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
@@ -312,15 +296,7 @@ func (c *ProbeController) Probe(
 	}
 	defer inst.Close()
 
-	feature := inst.GetFeature(coreextension.ObservatoryType())
-	burst, ok := feature.(coreextension.BurstObservatory)
-	if !ok {
-		return errors.New("probe config does not contain a burst observatory")
-	}
-	observer, ok := feature.(coreextension.Observatory)
-	if !ok {
-		return errors.New("probe observatory does not expose results")
-	}
+	burst := inst.GetFeature(coreextension.ObservatoryType()).(coreextension.BurstObservatory)
 	if err := inst.Start(); err != nil {
 		return fmt.Errorf("probe startup failed: %w", err)
 	}
@@ -329,46 +305,10 @@ func (c *ProbeController) Probe(
 		ctx,
 		inst,
 		burst,
-		observer,
 		groups,
 		int(maxConcurrency),
 		handler,
 	)
-}
-
-func decodeProbeGroups(encoded string) ([]probeGroup, error) {
-	var groups []probeGroup
-	if err := json.Unmarshal([]byte(encoded), &groups); err != nil {
-		return nil, fmt.Errorf("probe groups are invalid: %w", err)
-	}
-	if len(groups) == 0 {
-		return nil, errors.New("probe groups are empty")
-	}
-
-	seenGroups := make(map[string]struct{})
-	seenTags := make(map[string]struct{})
-	for groupIndex, group := range groups {
-		if strings.TrimSpace(group.GUID) == "" {
-			return nil, fmt.Errorf("probe group %d has no ID", groupIndex)
-		}
-		if _, exists := seenGroups[group.GUID]; exists {
-			return nil, fmt.Errorf("probe group ID %q is duplicated", group.GUID)
-		}
-		seenGroups[group.GUID] = struct{}{}
-		if len(group.OutboundTags) == 0 {
-			return nil, fmt.Errorf("probe group %d is empty", groupIndex)
-		}
-		for _, tag := range group.OutboundTags {
-			if strings.TrimSpace(tag) == "" {
-				return nil, fmt.Errorf("probe group %d contains an empty tag", groupIndex)
-			}
-			if _, exists := seenTags[tag]; exists {
-				return nil, fmt.Errorf("probe tag %q is duplicated", tag)
-			}
-			seenTags[tag] = struct{}{}
-		}
-	}
-	return groups, nil
 }
 
 type probeTarget struct {
@@ -376,16 +316,10 @@ type probeTarget struct {
 	outboundTag string
 }
 
-type probeCompletion struct {
-	groupIndex  int
-	acknowledge chan struct{}
-}
-
 func runProbeGroups(
 	ctx context.Context,
 	inst *core.Instance,
 	burst coreextension.BurstObservatory,
-	observer coreextension.Observatory,
 	groups []probeGroup,
 	maxConcurrency int,
 	handler ProbeHandler,
@@ -410,7 +344,7 @@ func runProbeGroups(
 	}
 	close(jobs)
 
-	completed := make(chan probeCompletion)
+	completed := make(chan int)
 	workerCount := maxConcurrency
 	if workerCount > targetCount {
 		workerCount = targetCount
@@ -425,17 +359,8 @@ func runProbeGroups(
 					return
 				}
 				burst.Check([]string{target.outboundTag})
-				completion := probeCompletion{
-					groupIndex:  target.groupIndex,
-					acknowledge: make(chan struct{}),
-				}
 				select {
-				case completed <- completion:
-				case <-ctx.Done():
-					return
-				}
-				select {
-				case <-completion.acknowledge:
+				case completed <- target.groupIndex:
 				case <-ctx.Done():
 					return
 				}
@@ -451,70 +376,43 @@ func runProbeGroups(
 	for index, group := range groups {
 		remaining[index] = len(group.OutboundTags)
 	}
-	for completion := range completed {
-		remaining[completion.groupIndex]--
-		group := groups[completion.groupIndex]
-		_, delay, alive, err := currentProbeResult(inst, observer, group)
-		if err != nil {
-			log.Printf("probe result unavailable for group %d: %v", completion.groupIndex, err)
-		}
-		if handler != nil {
-			handler.OnProbeResult(
-				group.GUID,
-				delay,
-				alive,
-				remaining[completion.groupIndex] == 0,
-			)
-		}
-		close(completion.acknowledge)
+	for groupIndex := range completed {
+		remaining[groupIndex]--
+		group := groups[groupIndex]
+		delay, alive := currentProbeResult(inst, burst, group)
+		handler.OnProbeResult(
+			group.GUID,
+			delay,
+			alive,
+			remaining[groupIndex] == 0,
+		)
 	}
 	return ctx.Err()
 }
 
 func currentProbeResult(
 	inst *core.Instance,
-	observer coreextension.Observatory,
+	observer coreextension.BurstObservatory,
 	group probeGroup,
-) (string, int64, bool, error) {
+) (int64, bool) {
 	target := group.OutboundTags[0]
 	if group.BalancerTag != "" {
-		principle, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
-		if !ok {
-			return "", -1, false, errors.New("router does not expose balancer principle targets")
+		principle := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
+		targets, _ := principle.GetPrincipleTarget(group.BalancerTag)
+		if len(targets) == 0 {
+			return -1, false
 		}
-		targets, err := principle.GetPrincipleTarget(group.BalancerTag)
-		if err != nil {
-			return "", -1, false, err
-		}
-		target = ""
-		for _, candidate := range targets {
-			if candidate != "" {
-				target = candidate
-				break
-			}
-		}
-	}
-	if target == "" {
-		return "", -1, false, nil
+		target = targets[0]
 	}
 
-	message, err := observer.GetObservation(context.Background())
-	if err != nil {
-		return target, -1, false, err
-	}
-	result, ok := message.(*coreobservatory.ObservationResult)
-	if !ok {
-		return target, -1, false, errors.New("unexpected probe result type")
-	}
+	message, _ := observer.GetObservation(context.Background())
+	result := message.(*coreobservatory.ObservationResult)
 	for _, status := range result.GetStatus() {
-		if status.GetOutboundTag() == target {
-			if !status.GetAlive() {
-				return target, -1, false, nil
-			}
-			return target, status.GetDelay(), true, nil
+		if status.GetOutboundTag() == target && status.GetAlive() {
+			return status.GetDelay(), true
 		}
 	}
-	return target, -1, false, nil
+	return -1, false
 }
 
 // CheckVersionX returns the library and Xray versions
