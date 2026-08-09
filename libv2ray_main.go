@@ -34,12 +34,14 @@ import (
 
 // Constants for environment variables
 const (
-	coreAsset            = "xray.location.asset"
-	coreCert             = "xray.location.cert"
-	xudpBaseKey          = "xray.xudp.basekey"
-	tunFdKey             = "xray.tun.fd"
-	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 43 // Library version, update here only
+	coreAsset                    = "xray.location.asset"
+	coreCert                     = "xray.location.cert"
+	xudpBaseKey                  = "xray.xudp.basekey"
+	tunFdKey                     = "xray.tun.fd"
+	browserDialerAddress         = "xray.browser.dialer"
+	libVersion                   = 43 // Library version, update here only
+	defaultRealDelayTimeout      = 5 * time.Second
+	probeResultAggregationWindow = 50 * time.Millisecond
 )
 
 // ProbeHandler receives one compact update for the affected profile group.
@@ -262,7 +264,9 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 		return -1, fmt.Errorf("startup failed: %w", err)
 	}
 	defer inst.Close()
-	return measureInstDelay(context.Background(), inst, url)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRealDelayTimeout)
+	defer cancel()
+	return measureInstDelayWithOptions(ctx, inst, url, http.MethodHead, 1, defaultRealDelayTimeout)
 }
 
 // Probe runs all delay-test groups through one short-lived Xray instance.
@@ -332,23 +336,18 @@ func runProbeGroups(
 			maxGroupSize = len(group.OutboundTags)
 		}
 	}
-	jobs := make(chan probeTarget, targetCount)
-	// Interleave groups so a large policy group cannot put every other profile
-	// behind all of its candidates when concurrency is limited.
-	for memberIndex := 0; memberIndex < maxGroupSize; memberIndex++ {
-		for groupIndex, group := range groups {
-			if memberIndex < len(group.OutboundTags) {
-				jobs <- probeTarget{groupIndex, group.OutboundTags[memberIndex]}
-			}
-		}
+	if targetCount == 0 {
+		return nil
 	}
-	close(jobs)
-
-	completed := make(chan int)
 	workerCount := maxConcurrency
+	if workerCount < 1 {
+		workerCount = 1
+	}
 	if workerCount > targetCount {
 		workerCount = targetCount
 	}
+	jobs := make(chan probeTarget, workerCount)
+	completed := make(chan probeTarget, workerCount)
 	var workers sync.WaitGroup
 	workers.Add(workerCount)
 	for range workerCount {
@@ -360,13 +359,30 @@ func runProbeGroups(
 				}
 				burst.Check([]string{target.outboundTag})
 				select {
-				case completed <- target.groupIndex:
+				case completed <- target:
 				case <-ctx.Done():
 					return
 				}
 			}
 		}()
 	}
+	go func() {
+		defer close(jobs)
+		// Interleave groups so a large policy group cannot put every other
+		// profile behind all of its candidates when concurrency is limited.
+		for memberIndex := 0; memberIndex < maxGroupSize; memberIndex++ {
+			for groupIndex, group := range groups {
+				if memberIndex >= len(group.OutboundTags) {
+					continue
+				}
+				select {
+				case jobs <- probeTarget{groupIndex, group.OutboundTags[memberIndex]}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
 	go func() {
 		workers.Wait()
 		close(completed)
@@ -376,43 +392,102 @@ func runProbeGroups(
 	for index, group := range groups {
 		remaining[index] = len(group.OutboundTags)
 	}
-	for groupIndex := range completed {
-		remaining[groupIndex]--
-		group := groups[groupIndex]
-		delay, alive := currentProbeResult(inst, burst, group)
-		handler.OnProbeResult(
-			group.GUID,
-			delay,
-			alive,
-			remaining[groupIndex] == 0,
-		)
+	for {
+		first, ok := <-completed
+		if !ok {
+			break
+		}
+		batch, closed := collectProbeCompletions(first, completed, workerCount)
+		statuses := currentProbeStatuses(burst)
+		results := make(map[int]probeResult, len(batch))
+		for _, target := range batch {
+			if _, found := results[target.groupIndex]; !found {
+				results[target.groupIndex] = currentProbeResult(inst, groups[target.groupIndex], statuses)
+			}
+		}
+		for _, target := range batch {
+			remaining[target.groupIndex]--
+			group := groups[target.groupIndex]
+			result := results[target.groupIndex]
+			handler.OnProbeResult(
+				group.GUID,
+				result.delay,
+				result.alive,
+				remaining[target.groupIndex] == 0,
+			)
+		}
+		if closed {
+			break
+		}
 	}
 	return ctx.Err()
 }
 
+func collectProbeCompletions(
+	first probeTarget,
+	completed <-chan probeTarget,
+	limit int,
+) ([]probeTarget, bool) {
+	batch := []probeTarget{first}
+	timer := time.NewTimer(probeResultAggregationWindow)
+	defer timer.Stop()
+	for len(batch) < limit {
+		select {
+		case target, ok := <-completed:
+			if !ok {
+				return batch, true
+			}
+			batch = append(batch, target)
+		case <-timer.C:
+			return batch, false
+		}
+	}
+	return batch, false
+}
+
+type probeResult struct {
+	delay int64
+	alive bool
+}
+
+func currentProbeStatuses(observer coreextension.BurstObservatory) map[string]*coreobservatory.OutboundStatus {
+	message, err := observer.GetObservation(context.Background())
+	if err != nil {
+		return nil
+	}
+	result, ok := message.(*coreobservatory.ObservationResult)
+	if !ok {
+		return nil
+	}
+	statuses := make(map[string]*coreobservatory.OutboundStatus, len(result.GetStatus()))
+	for _, status := range result.GetStatus() {
+		statuses[status.GetOutboundTag()] = status
+	}
+	return statuses
+}
+
 func currentProbeResult(
 	inst *core.Instance,
-	observer coreextension.BurstObservatory,
 	group probeGroup,
-) (int64, bool) {
+	statuses map[string]*coreobservatory.OutboundStatus,
+) probeResult {
+	if len(group.OutboundTags) == 0 {
+		return probeResult{delay: -1}
+	}
 	target := group.OutboundTags[0]
 	if group.BalancerTag != "" {
 		principle := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
 		targets, _ := principle.GetPrincipleTarget(group.BalancerTag)
 		if len(targets) == 0 {
-			return -1, false
+			return probeResult{delay: -1}
 		}
 		target = targets[0]
 	}
-
-	message, _ := observer.GetObservation(context.Background())
-	result := message.(*coreobservatory.ObservationResult)
-	for _, status := range result.GetStatus() {
-		if status.GetOutboundTag() == target && status.GetAlive() {
-			return status.GetDelay(), true
-		}
+	status := statuses[target]
+	if status != nil && status.GetAlive() {
+		return probeResult{delay: status.GetDelay(), alive: true}
 	}
-	return -1, false
+	return probeResult{delay: -1}
 }
 
 // CheckVersionX returns the library and Xray versions
@@ -469,6 +544,16 @@ func (x *CoreController) doStartLoop(configContent string) error {
 
 // measureInstDelay measures the delay for an instance to a given URL
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
+	return measureInstDelayWithOptions(ctx, inst, url, http.MethodGet, 2, 12*time.Second)
+}
+
+func measureInstDelayWithOptions(
+	ctx context.Context,
+	inst *core.Instance,
+	url, method string,
+	attempts int,
+	timeout time.Duration,
+) (int64, error) {
 	if inst == nil {
 		return -1, errors.New("core instance is nil")
 	}
@@ -478,7 +563,7 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 	}
 
 	tr := &http.Transport{
-		TLSHandshakeTimeout: 6 * time.Second,
+		TLSHandshakeTimeout: timeout,
 		DisableKeepAlives:   false,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dest, err := corenet.ParseDestination(fmt.Sprintf("%s:%s", network, addr))
@@ -491,7 +576,7 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 
 	client := &http.Client{
 		Transport: tr,
-		Timeout:   12 * time.Second,
+		Timeout:   timeout,
 	}
 
 	var minDuration int64 = -1
@@ -501,8 +586,6 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 	// Close idle connections to ensure the temporary instance can be closed safely
 	defer tr.CloseIdleConnections()
 
-	// Add exception handling and increase retry attempts
-	const attempts = 2
 	for i := 0; i < attempts; i++ {
 		select {
 		case <-ctx.Done():
@@ -515,7 +598,7 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 			// Continue execution
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		req, err := http.NewRequestWithContext(ctx, method, url, nil)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to create HTTP request: %w", err)
 			continue
@@ -528,8 +611,10 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 			continue
 		}
 
-		// Read and close body immediately to allow connection reuse for the next attempt
-		_, err = io.Copy(io.Discard, resp.Body)
+		// Read GET bodies so a subsequent attempt may reuse the connection.
+		if method == http.MethodGet {
+			_, err = io.Copy(io.Discard, resp.Body)
+		}
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
