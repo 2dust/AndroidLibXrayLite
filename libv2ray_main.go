@@ -39,7 +39,7 @@ const (
 	xudpBaseKey                  = "xray.xudp.basekey"
 	tunFdKey                     = "xray.tun.fd"
 	browserDialerAddress         = "xray.browser.dialer"
-	libVersion                   = 40 // Library version, update here only
+	libVersion                   = 41 // Library version, update here only
 	defaultRealDelayTimeout      = 5 * time.Second
 	probeResultAggregationWindow = 50 * time.Millisecond
 )
@@ -56,25 +56,37 @@ type probeGroup struct {
 	BalancerTag  string   `json:"balancerTag"`
 }
 
+// Xray stores its system DNS client and outbound manager in package globals.
+// Keep every short-lived probe core exclusive within this process while still
+// allowing one shared core to run its checks concurrently.
+var probeCoreGate = make(chan struct{}, 1)
+
+func acquireProbeCore(ctx context.Context) error {
+	select {
+	case probeCoreGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseProbeCore() {
+	<-probeCoreGate
+}
+
 // ProbeController owns one cancellable probe sequence.
 type ProbeController struct {
-	access    sync.Mutex
-	cancel    context.CancelFunc
-	cancelled bool
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func NewProbeController() *ProbeController {
-	return &ProbeController{}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &ProbeController{ctx: ctx, cancel: cancel}
 }
 
 func (c *ProbeController) Cancel() {
-	c.access.Lock()
-	c.cancelled = true
-	cancel := c.cancel
-	c.access.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+	c.cancel()
 }
 
 // CoreController represents a controller for managing Xray core instance lifecycle
@@ -240,7 +252,19 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
-	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
+	return measureOutboundDelay(context.Background(), ConfigureFileContent, url)
+}
+
+// MeasureDelay runs one individually configured fallback through this controller.
+func (c *ProbeController) MeasureDelay(configContent string, url string) (int64, error) {
+	return measureOutboundDelay(c.ctx, configContent, url)
+}
+
+func measureOutboundDelay(parentCtx context.Context, configContent string, url string) (int64, error) {
+	if err := parentCtx.Err(); err != nil {
+		return -1, err
+	}
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
 		return -1, fmt.Errorf("config load error: %w", err)
 	}
@@ -257,7 +281,14 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	}
 	config.App = essentialApp
 
-	inst, err := core.New(config)
+	if err := acquireProbeCore(parentCtx); err != nil {
+		return -1, err
+	}
+	defer releaseProbeCore()
+
+	ctx, cancel := context.WithTimeout(parentCtx, defaultRealDelayTimeout)
+	defer cancel()
+	inst, err := core.NewWithContext(ctx, config)
 	if err != nil {
 		return -1, fmt.Errorf("instance creation failed: %w", err)
 	}
@@ -266,8 +297,6 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 		return -1, fmt.Errorf("startup failed: %w", err)
 	}
 	defer inst.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRealDelayTimeout)
-	defer cancel()
 	return measureInstDelayWithOptions(ctx, inst, url, http.MethodHead, 1, defaultRealDelayTimeout)
 }
 
@@ -291,21 +320,20 @@ func (c *ProbeController) Probe(
 		return fmt.Errorf("probe groups are invalid: %w", err)
 	}
 
-	c.access.Lock()
-	if c.cancelled {
-		c.access.Unlock()
-		return context.Canceled
+	ctx := c.ctx
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	c.cancel = cancel
-	c.access.Unlock()
-	defer cancel()
 
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
 		return fmt.Errorf("probe config load failed: %w", err)
 	}
 	config.Inbound = nil
+	if err := acquireProbeCore(ctx); err != nil {
+		return err
+	}
+	defer releaseProbeCore()
 
 	inst, err := core.NewWithContext(ctx, config)
 	if err != nil {
