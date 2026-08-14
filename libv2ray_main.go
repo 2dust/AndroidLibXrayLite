@@ -2,6 +2,7 @@ package libv2ray
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,11 +17,14 @@ import (
 	"time"
 
 	coreapplog "github.com/xtls/xray-core/app/log"
+	coreobservatory "github.com/xtls/xray-core/app/observatory"
 	corecommlog "github.com/xtls/xray-core/common/log"
 	corenet "github.com/xtls/xray-core/common/net"
 	corefilesystem "github.com/xtls/xray-core/common/platform/filesystem"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	coreextension "github.com/xtls/xray-core/features/extension"
+	corerouting "github.com/xtls/xray-core/features/routing"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -30,13 +34,60 @@ import (
 
 // Constants for environment variables
 const (
-	coreAsset            = "xray.location.asset"
-	coreCert             = "xray.location.cert"
-	xudpBaseKey          = "xray.xudp.basekey"
-	tunFdKey             = "xray.tun.fd"
-	browserDialerAddress = "xray.browser.dialer"
-	libVersion           = 39 // Library version, update here only
+	coreAsset                    = "xray.location.asset"
+	coreCert                     = "xray.location.cert"
+	xudpBaseKey                  = "xray.xudp.basekey"
+	tunFdKey                     = "xray.tun.fd"
+	browserDialerAddress         = "xray.browser.dialer"
+	libVersion                   = 41 // Library version, update here only
+	defaultRealDelayTimeout      = 5 * time.Second
+	probeResultAggregationWindow = 50 * time.Millisecond
 )
+
+// ProbeHandler receives a group update whenever one of its targets finishes.
+// Calls are serialized even though the underlying checks run concurrently.
+type ProbeHandler interface {
+	OnProbeResult(groupID string, delay int64, completed bool)
+}
+
+type probeGroup struct {
+	GUID         string   `json:"guid"`
+	OutboundTags []string `json:"outboundTags"`
+	BalancerTag  string   `json:"balancerTag"`
+}
+
+// Xray stores its system DNS client and outbound manager in package globals.
+// Keep every short-lived probe core exclusive within this process while still
+// allowing one shared core to run its checks concurrently.
+var probeCoreGate = make(chan struct{}, 1)
+
+func acquireProbeCore(ctx context.Context) error {
+	select {
+	case probeCoreGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseProbeCore() {
+	<-probeCoreGate
+}
+
+// ProbeController owns one cancellable probe sequence.
+type ProbeController struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func NewProbeController() *ProbeController {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &ProbeController{ctx: ctx, cancel: cancel}
+}
+
+func (c *ProbeController) Cancel() {
+	c.cancel()
+}
 
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
@@ -201,7 +252,19 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
-	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
+	return measureOutboundDelay(context.Background(), ConfigureFileContent, url)
+}
+
+// MeasureDelay runs one individually configured fallback through this controller.
+func (c *ProbeController) MeasureDelay(configContent string, url string) (int64, error) {
+	return measureOutboundDelay(c.ctx, configContent, url)
+}
+
+func measureOutboundDelay(parentCtx context.Context, configContent string, url string) (int64, error) {
+	if err := parentCtx.Err(); err != nil {
+		return -1, err
+	}
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
 	if err != nil {
 		return -1, fmt.Errorf("config load error: %w", err)
 	}
@@ -218,7 +281,14 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 	}
 	config.App = essentialApp
 
-	inst, err := core.New(config)
+	if err := acquireProbeCore(parentCtx); err != nil {
+		return -1, err
+	}
+	defer releaseProbeCore()
+
+	ctx, cancel := context.WithTimeout(parentCtx, defaultRealDelayTimeout)
+	defer cancel()
+	inst, err := core.NewWithContext(ctx, config)
 	if err != nil {
 		return -1, fmt.Errorf("instance creation failed: %w", err)
 	}
@@ -227,7 +297,237 @@ func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error
 		return -1, fmt.Errorf("startup failed: %w", err)
 	}
 	defer inst.Close()
-	return measureInstDelay(context.Background(), inst, url)
+	return measureInstDelayWithOptions(ctx, inst, url, http.MethodHead, 1, defaultRealDelayTimeout)
+}
+
+// Probe runs all delay-test groups through one short-lived Xray instance.
+// Every target is checked once. maxConcurrency limits active Observatory
+// checks across every group member.
+func (c *ProbeController) Probe(
+	configContent, groupsJSON string,
+	maxConcurrency int32,
+	handler ProbeHandler,
+) (err error) {
+	// Keep malformed core state on the ordinary error path so the app can isolate
+	// the responsible profile instead of losing every result in the batch.
+	defer func() {
+		if value := recover(); value != nil {
+			err = fmt.Errorf("probe panicked: %v", value)
+		}
+	}()
+	var groups []probeGroup
+	if err := json.Unmarshal([]byte(groupsJSON), &groups); err != nil {
+		return fmt.Errorf("probe groups are invalid: %w", err)
+	}
+
+	ctx := c.ctx
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(configContent))
+	if err != nil {
+		return fmt.Errorf("probe config load failed: %w", err)
+	}
+	config.Inbound = nil
+	if err := acquireProbeCore(ctx); err != nil {
+		return err
+	}
+	defer releaseProbeCore()
+
+	inst, err := core.NewWithContext(ctx, config)
+	if err != nil {
+		return fmt.Errorf("probe instance creation failed: %w", err)
+	}
+	defer inst.Close()
+
+	burst, ok := inst.GetFeature(coreextension.ObservatoryType()).(coreextension.BurstObservatory)
+	if !ok || burst == nil {
+		return errors.New("probe burst observatory is unavailable")
+	}
+	if err := inst.Start(); err != nil {
+		return fmt.Errorf("probe startup failed: %w", err)
+	}
+
+	return runProbeGroups(
+		ctx,
+		inst,
+		burst,
+		groups,
+		int(maxConcurrency),
+		handler,
+	)
+}
+
+type probeTarget struct {
+	groupIndex  int
+	outboundTag string
+}
+
+func runProbeGroups(
+	ctx context.Context,
+	inst *core.Instance,
+	burst coreextension.BurstObservatory,
+	groups []probeGroup,
+	maxConcurrency int,
+	handler ProbeHandler,
+) error {
+	targetCount := 0
+	maxGroupSize := 0
+	for _, group := range groups {
+		targetCount += len(group.OutboundTags)
+		if len(group.OutboundTags) > maxGroupSize {
+			maxGroupSize = len(group.OutboundTags)
+		}
+	}
+	if targetCount == 0 {
+		return nil
+	}
+	workerCount := maxConcurrency
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > targetCount {
+		workerCount = targetCount
+	}
+	jobs := make(chan probeTarget, workerCount)
+	completed := make(chan probeTarget, workerCount)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for target := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				burst.Check([]string{target.outboundTag})
+				select {
+				case completed <- target:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		// Interleave groups so a large policy group cannot put every other
+		// profile behind all of its candidates when concurrency is limited.
+		for memberIndex := 0; memberIndex < maxGroupSize; memberIndex++ {
+			for groupIndex, group := range groups {
+				if memberIndex >= len(group.OutboundTags) {
+					continue
+				}
+				select {
+				case jobs <- probeTarget{groupIndex, group.OutboundTags[memberIndex]}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(completed)
+	}()
+
+	remaining := make([]int, len(groups))
+	for index, group := range groups {
+		remaining[index] = len(group.OutboundTags)
+	}
+	for {
+		first, ok := <-completed
+		if !ok {
+			break
+		}
+		batch, closed := collectProbeCompletions(first, completed, workerCount)
+		statuses := currentProbeStatuses(burst)
+		results := make(map[int]int64, len(batch))
+		for _, target := range batch {
+			if _, found := results[target.groupIndex]; !found {
+				results[target.groupIndex] = currentProbeDelay(inst, groups[target.groupIndex], statuses)
+			}
+		}
+		for _, target := range batch {
+			remaining[target.groupIndex]--
+			group := groups[target.groupIndex]
+			handler.OnProbeResult(
+				group.GUID,
+				results[target.groupIndex],
+				remaining[target.groupIndex] == 0,
+			)
+		}
+		if closed {
+			break
+		}
+	}
+	return ctx.Err()
+}
+
+func collectProbeCompletions(
+	first probeTarget,
+	completed <-chan probeTarget,
+	limit int,
+) ([]probeTarget, bool) {
+	batch := []probeTarget{first}
+	timer := time.NewTimer(probeResultAggregationWindow)
+	defer timer.Stop()
+	for len(batch) < limit {
+		select {
+		case target, ok := <-completed:
+			if !ok {
+				return batch, true
+			}
+			batch = append(batch, target)
+		case <-timer.C:
+			return batch, false
+		}
+	}
+	return batch, false
+}
+
+func currentProbeStatuses(observer coreextension.BurstObservatory) map[string]*coreobservatory.OutboundStatus {
+	message, err := observer.GetObservation(context.Background())
+	if err != nil {
+		return nil
+	}
+	result, ok := message.(*coreobservatory.ObservationResult)
+	if !ok {
+		return nil
+	}
+	statuses := make(map[string]*coreobservatory.OutboundStatus, len(result.GetStatus()))
+	for _, status := range result.GetStatus() {
+		statuses[status.GetOutboundTag()] = status
+	}
+	return statuses
+}
+
+func currentProbeDelay(
+	inst *core.Instance,
+	group probeGroup,
+	statuses map[string]*coreobservatory.OutboundStatus,
+) int64 {
+	if len(group.OutboundTags) == 0 {
+		return -1
+	}
+	target := group.OutboundTags[0]
+	if group.BalancerTag != "" {
+		principle, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
+		if !ok || principle == nil {
+			return -1
+		}
+		targets, err := principle.GetPrincipleTarget(group.BalancerTag)
+		if err != nil || len(targets) == 0 || targets[0] == "" {
+			return -1
+		}
+		target = targets[0]
+	}
+	status := statuses[target]
+	if status != nil && status.GetAlive() {
+		return status.GetDelay()
+	}
+	return -1
 }
 
 // CheckVersionX returns the library and Xray versions
@@ -284,6 +584,16 @@ func (x *CoreController) doStartLoop(configContent string) error {
 
 // measureInstDelay measures the delay for an instance to a given URL
 func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int64, error) {
+	return measureInstDelayWithOptions(ctx, inst, url, http.MethodGet, 2, 12*time.Second)
+}
+
+func measureInstDelayWithOptions(
+	ctx context.Context,
+	inst *core.Instance,
+	url, method string,
+	attempts int,
+	timeout time.Duration,
+) (int64, error) {
 	if inst == nil {
 		return -1, errors.New("core instance is nil")
 	}
@@ -306,7 +616,7 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 
 	client := &http.Client{
 		Transport: tr,
-		Timeout:   12 * time.Second,
+		Timeout:   timeout,
 	}
 
 	var minDuration int64 = -1
@@ -316,8 +626,6 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 	// Close idle connections to ensure the temporary instance can be closed safely
 	defer tr.CloseIdleConnections()
 
-	// Add exception handling and increase retry attempts
-	const attempts = 2
 	for i := 0; i < attempts; i++ {
 		select {
 		case <-ctx.Done():
@@ -330,7 +638,7 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 			// Continue execution
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		req, err := http.NewRequestWithContext(ctx, method, url, nil)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to create HTTP request: %w", err)
 			continue
@@ -343,8 +651,10 @@ func measureInstDelay(ctx context.Context, inst *core.Instance, url string) (int
 			continue
 		}
 
-		// Read and close body immediately to allow connection reuse for the next attempt
-		_, err = io.Copy(io.Discard, resp.Body)
+		// Read GET bodies so a subsequent attempt may reuse the connection.
+		if method == http.MethodGet {
+			_, err = io.Copy(io.Discard, resp.Body)
+		}
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
