@@ -13,6 +13,7 @@ import (
 
 	corenet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/serial"
+	coresession "github.com/xtls/xray-core/common/session"
 	core "github.com/xtls/xray-core/core"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
@@ -62,10 +63,13 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	return measureInstDelay(ctx, x.coreInstance, url)
 }
 
-// GetUrlContent retrieves a URL through the current core instance.
-func (x *CoreController) GetUrlContent(url string) (string, error) {
+// GetUrlContent retrieves a URL through the requested outbound of the current core instance.
+func (x *CoreController) GetUrlContent(url string, outboundTag string) (string, error) {
 	if x.coreInstance == nil {
 		return "", errors.New("core instance is nil")
+	}
+	if outboundTag == "" {
+		return "", errors.New("outbound tag is empty")
 	}
 
 	tr := &http.Transport{
@@ -76,6 +80,7 @@ func (x *CoreController) GetUrlContent(url string) (string, error) {
 			if err != nil {
 				return nil, err
 			}
+			ctx = coresession.SetForcedOutboundTagToContext(ctx, outboundTag)
 			return core.Dial(ctx, x.coreInstance, dest)
 		},
 	}
