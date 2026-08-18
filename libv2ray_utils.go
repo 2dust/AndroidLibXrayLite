@@ -62,6 +62,42 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	return measureInstDelay(ctx, x.coreInstance, url)
 }
 
+// GetUrlContent retrieves a URL through the current core instance.
+func (x *CoreController) GetUrlContent(url string) (string, error) {
+	if x.coreInstance == nil {
+		return "", errors.New("core instance is nil")
+	}
+
+	tr := &http.Transport{
+		TLSHandshakeTimeout: 5 * time.Second,
+		DisableKeepAlives:   true,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dest, err := corenet.ParseDestination(fmt.Sprintf("%s:%s", network, addr))
+			if err != nil {
+				return nil, err
+			}
+			return core.Dial(ctx, x.coreInstance, dest)
+		},
+	}
+	defer tr.CloseIdleConnections()
+
+	resp, err := (&http.Client{Transport: tr, Timeout: 5 * time.Second}).Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("invalid status: %s", resp.Status)
+	}
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	return string(content), nil
+}
+
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
 func MeasureOutboundDelay(ConfigureFileContent string, url string) (int64, error) {
 	config, err := coreserial.LoadJSONConfig(strings.NewReader(ConfigureFileContent))
