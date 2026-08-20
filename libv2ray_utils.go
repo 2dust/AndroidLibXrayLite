@@ -2,11 +2,13 @@ package libv2ray
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -102,11 +104,66 @@ func firstBalancerPrincipleTarget(inst *core.Instance, balancerTag string) (stri
 
 // GetUrlContent retrieves a URL through the requested outbound of the current core instance.
 func (x *CoreController) GetUrlContent(url string, outboundTag string) (string, error) {
-	if x.coreInstance == nil {
-		return "", errors.New("core instance is nil")
+	resp, err := x.getURL(url, outboundTag, "", 5*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	return string(content), nil
+}
+
+// DownloadUrlToFile downloads a URL through the requested outbound of the
+// current core instance. Headers are supplied as a JSON object.
+func (x *CoreController) DownloadUrlToFile(url string, outboundTag string, headersJSON string, filePath string, timeoutMillis int64) (err error) {
+	if filePath == "" {
+		return errors.New("file path is empty")
+	}
+	timeout := time.Duration(timeoutMillis) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+
+	resp, err := x.getURL(url, outboundTag, headersJSON, timeout)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file: %w", err)
+	}
+	defer func() {
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("failed to close destination file: %w", closeErr)
+		}
+		if err != nil {
+			_ = os.Remove(filePath)
+		}
+	}()
+
+	if _, err = io.Copy(file, resp.Body); err != nil {
+		return fmt.Errorf("failed to write response body: %w", err)
+	}
+	return nil
+}
+
+func (x *CoreController) getURL(url string, outboundTag string, headersJSON string, timeout time.Duration) (*http.Response, error) {
+	x.coreMutex.Lock()
+	inst := x.coreInstance
+	running := x.IsRunning
+	x.coreMutex.Unlock()
+
+	if !running || inst == nil {
+		return nil, errors.New("core is not running")
 	}
 	if outboundTag == "" {
-		return "", errors.New("outbound tag is empty")
+		return nil, errors.New("outbound tag is empty")
 	}
 
 	tr := &http.Transport{
@@ -118,26 +175,34 @@ func (x *CoreController) GetUrlContent(url string, outboundTag string) (string, 
 				return nil, err
 			}
 			ctx = coresession.SetForcedOutboundTagToContext(ctx, outboundTag)
-			return core.Dial(ctx, x.coreInstance, dest)
+			return core.Dial(ctx, inst, dest)
 		},
 	}
-	defer tr.CloseIdleConnections()
-
-	resp, err := (&http.Client{Transport: tr, Timeout: 5 * time.Second}).Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	defer resp.Body.Close()
+	if headersJSON != "" {
+		headers := make(map[string]string)
+		if err := json.Unmarshal([]byte(headersJSON), &headers); err != nil {
+			return nil, fmt.Errorf("failed to parse request headers: %w", err)
+		}
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+	}
+
+	resp, err := (&http.Client{Transport: tr, Timeout: timeout}).Do(req)
+	if err != nil {
+		return nil, err
+	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("invalid status: %s", resp.Status)
+		resp.Body.Close()
+		return nil, fmt.Errorf("invalid status: %s", resp.Status)
 	}
 
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
-	}
-	return string(content), nil
+	return resp, nil
 }
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL
