@@ -129,6 +129,7 @@ func (x *CoreController) StopLoop() error {
 
 	if x.IsRunning {
 		x.doShutdown()
+		x.CallbackHandler.Shutdown()
 		x.CallbackHandler.OnEmitStatus(0, "Core stopped")
 	}
 	return nil
