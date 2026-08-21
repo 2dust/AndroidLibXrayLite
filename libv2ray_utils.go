@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -134,21 +135,32 @@ func (x *CoreController) DownloadUrlToFile(url string, outboundTag string, heade
 	}
 	defer resp.Body.Close()
 
-	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	file, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+".*")
 	if err != nil {
-		return fmt.Errorf("failed to create destination file: %w", err)
+		return fmt.Errorf("failed to create temporary file: %w", err)
 	}
+	temporaryPath := file.Name()
+	closed := false
 	defer func() {
-		if closeErr := file.Close(); err == nil && closeErr != nil {
-			err = fmt.Errorf("failed to close destination file: %w", closeErr)
+		if !closed {
+			_ = file.Close()
 		}
-		if err != nil {
-			_ = os.Remove(filePath)
-		}
+		_ = os.Remove(temporaryPath)
 	}()
 
-	if _, err = io.Copy(file, resp.Body); err != nil {
+	written, err := io.Copy(file, resp.Body)
+	if err != nil {
 		return fmt.Errorf("failed to write response body: %w", err)
+	}
+	if resp.ContentLength >= 0 && written != resp.ContentLength {
+		return fmt.Errorf("response length mismatch: expected %d bytes, got %d", resp.ContentLength, written)
+	}
+	if err = file.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary file: %w", err)
+	}
+	closed = true
+	if err = os.Rename(temporaryPath, filePath); err != nil {
+		return fmt.Errorf("failed to replace destination file: %w", err)
 	}
 	return nil
 }
@@ -197,7 +209,9 @@ func (x *CoreController) getURL(url string, outboundTag string, headersJSON stri
 		return nil, err
 	}
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+	if resp.StatusCode < http.StatusOK ||
+		resp.StatusCode >= http.StatusMultipleChoices ||
+		resp.StatusCode == http.StatusPartialContent {
 		resp.Body.Close()
 		return nil, fmt.Errorf("invalid status: %s", resp.Status)
 	}
