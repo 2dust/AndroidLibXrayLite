@@ -120,9 +120,17 @@ func (x *CoreController) GetUrlContent(url string, outboundTag string) (string, 
 
 // DownloadUrlToFile downloads a URL through the requested outbound of the
 // current core instance. Headers are supplied as a JSON object.
-func (x *CoreController) DownloadUrlToFile(url string, outboundTag string, headersJSON string, filePath string, timeoutMillis int64) (err error) {
+func (x *CoreController) DownloadUrlToFile(url string, outboundTag string, headersJSON string, filePath string, timeoutMillis int64) error {
+	_, err := x.DownloadUrlToFileWithHeaders(url, outboundTag, headersJSON, filePath, timeoutMillis)
+	return err
+}
+
+// DownloadUrlToFileWithHeaders downloads a URL and returns the final response
+// headers as a JSON object of string arrays, only after the file is complete.
+// It uses the same outbound routing and transactional file replacement as DownloadUrlToFile.
+func (x *CoreController) DownloadUrlToFileWithHeaders(url string, outboundTag string, headersJSON string, filePath string, timeoutMillis int64) (string, error) {
 	if filePath == "" {
-		return errors.New("file path is empty")
+		return "", errors.New("file path is empty")
 	}
 	timeout := time.Duration(timeoutMillis) * time.Millisecond
 	if timeout <= 0 {
@@ -131,13 +139,18 @@ func (x *CoreController) DownloadUrlToFile(url string, outboundTag string, heade
 
 	resp, err := x.getURL(url, outboundTag, headersJSON, timeout)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
+	responseHeaders, err := json.Marshal(resp.Header)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode response headers: %w", err)
+	}
+
 	file, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+".*")
 	if err != nil {
-		return fmt.Errorf("failed to create temporary file: %w", err)
+		return "", fmt.Errorf("failed to create temporary file: %w", err)
 	}
 	temporaryPath := file.Name()
 	closed := false
@@ -150,19 +163,19 @@ func (x *CoreController) DownloadUrlToFile(url string, outboundTag string, heade
 
 	written, err := io.Copy(file, resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to write response body: %w", err)
+		return "", fmt.Errorf("failed to write response body: %w", err)
 	}
 	if resp.ContentLength >= 0 && written != resp.ContentLength {
-		return fmt.Errorf("response length mismatch: expected %d bytes, got %d", resp.ContentLength, written)
+		return "", fmt.Errorf("response length mismatch: expected %d bytes, got %d", resp.ContentLength, written)
 	}
 	if err = file.Close(); err != nil {
-		return fmt.Errorf("failed to close temporary file: %w", err)
+		return "", fmt.Errorf("failed to close temporary file: %w", err)
 	}
 	closed = true
 	if err = os.Rename(temporaryPath, filePath); err != nil {
-		return fmt.Errorf("failed to replace destination file: %w", err)
+		return "", fmt.Errorf("failed to replace destination file: %w", err)
 	}
-	return nil
+	return string(responseHeaders), nil
 }
 
 func (x *CoreController) getURL(url string, outboundTag string, headersJSON string, timeout time.Duration) (*http.Response, error) {
