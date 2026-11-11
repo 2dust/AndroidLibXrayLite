@@ -28,7 +28,10 @@ jobs:
 
     - name: Install gomobile
       run: |
-        go install golang.org/x/mobile/cmd/gomobile@latest
+        # Use the golang.org/x/mobile version go.mod already requires (tidy.yml
+        # updates it with each xray-core bump) rather than whatever @latest is
+        # at build time, so rebuilding a tag later uses the same gomobile.
+        go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
         export PATH=$PATH:~/go/bin
         
     - name: Setup Android SDK
@@ -45,6 +48,18 @@ jobs:
           --install "ndk;29.0.14206865"
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
 
+    # gomobile compiles the aar's Java bindings (classes.jar) with javac, so the
+    # JDK is part of the output. Without this the runner image's default JDK
+    # is used, which changes whenever GitHub updates the image. This is the
+    # Temurin 17.0.20.1+1 that ubuntu-latest defaults to today, spelled as the
+    # Adoptium semver setup-java matches ('17.0.20.1' would only match the
+    # preinstalled copy by accident, and stop matching once the image moves).
+    - name: Setup Java
+      uses: actions/setup-java@v6.0.0
+      with:
+        distribution: 'temurin'
+        java-version: '17.0.20+101'
+
     - name: Build
       run: |
          mkdir -p assets data
@@ -53,6 +68,13 @@ jobs:
          gomobile init
          go mod tidy
          gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid= -checklinkname=0' ./
+         # What a rebuild of this release needs beyond the tagged source: the geo
+         # data resolved above, and the exact Go release setup-go picked for
+         # go.mod's `go` line. Published next to the aar.
+         { cat data/geo-assets.lock; echo "GO_VERSION='$(go env GOVERSION)'"; } > libv2ray-build.lock
+         cat libv2ray-build.lock
+         # Checksums of what this run built, to compare a rebuild against
+         sha256sum libv2ray*r
  
     - name: Upload build artifacts
       if: github.event.inputs.release_tag == ''
@@ -61,6 +83,7 @@ jobs:
         name: libv2ray
         path: |
           ${{ github.workspace }}/libv2ray*r
+          ${{ github.workspace }}/libv2ray-build.lock
 
     - name: Upload AndroidLibXrayLite to release
       if: github.event.inputs.release_tag != ''
@@ -69,3 +92,10 @@ jobs:
         file: ./libv2ray*r
         tag: ${{ github.event.inputs.release_tag }}
         file_glob: true
+
+    - name: Upload build lock to release
+      if: github.event.inputs.release_tag != ''
+      uses: svenstaro/upload-release-action@v2
+      with:
+        file: ./libv2ray-build.lock
+        tag: ${{ github.event.inputs.release_tag }}
