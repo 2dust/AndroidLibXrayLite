@@ -118,11 +118,51 @@ func TestDownloadUrlToFileFailureDoesNotPublishHeadersOrBody(t *testing.T) {
 	}
 }
 
+func TestAppRequestsUseConfiguredBalancerFallback(t *testing.T) {
+	controller := testHTTPControllerWithConfig(t, `{
+		"log":{"loglevel":"none"},
+		"outbounds":[
+			{"protocol":"blackhole","tag":"blocked"},
+			{"protocol":"blackhole","tag":"member"},
+			{"protocol":"freedom","tag":"group-fallback"}
+		],
+		"observatory":{"subjectSelector":["unobserved"]},
+		"routing":{"balancers":[
+			{"tag":"group","selector":["member"],"strategy":{"type":"leastPing"},"fallbackTag":"group-fallback"},
+			{"tag":"without-fallback","selector":["member"],"strategy":{"type":"leastPing"}}
+		]}
+	}`)
+	if target, err := controller.GetBalancerPrincipleTarget("group"); err != nil || target != "" {
+		t.Fatalf("expected no observed target, got %q, error = %v", target, err)
+	}
+	tag, err := controller.GetBalancerOutbound("group")
+	if err != nil || tag != "group-fallback" {
+		t.Fatalf("resolved outbound = %q, error = %v", tag, err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("through the fallback"))
+	}))
+	defer server.Close()
+	if body, err := controller.GetUrlContent(server.URL, tag); err != nil || body != "through the fallback" {
+		t.Fatalf("body = %q, error = %v", body, err)
+	}
+	for _, group := range []string{"without-fallback", "unknown"} {
+		if tag, err := controller.GetBalancerOutbound(group); err == nil || tag != "" {
+			t.Errorf("unexpected outbound %q for %s, error = %v", tag, group, err)
+		}
+	}
+}
+
 func testHTTPController(t *testing.T) *CoreController {
 	t.Helper()
 	// A blocked default outbound makes successful downloads prove that the
 	// requested outbound is selected, including after an HTTP redirect.
-	config, err := coreserial.LoadJSONConfig(strings.NewReader(`{"log":{"loglevel":"none"},"outbounds":[{"protocol":"blackhole","tag":"blocked"},{"protocol":"freedom","tag":"proxy"}]}`))
+	return testHTTPControllerWithConfig(t, `{"log":{"loglevel":"none"},"outbounds":[{"protocol":"blackhole","tag":"blocked"},{"protocol":"freedom","tag":"proxy"}]}`)
+}
+
+func testHTTPControllerWithConfig(t *testing.T, content string) *CoreController {
+	t.Helper()
+	config, err := coreserial.LoadJSONConfig(strings.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,5 +174,5 @@ func testHTTPController(t *testing.T) *CoreController {
 	if err := inst.Start(); err != nil {
 		t.Fatal(err)
 	}
-	return &CoreController{coreInstance: inst, IsRunning: true}
+	return &CoreController{coreInstance: inst, IsRunning: true, balancerFallbacks: configuredBalancerFallbacks(config)}
 }
