@@ -2,18 +2,25 @@ package libv2ray
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	corerouter "github.com/xtls/xray-core/app/router"
 	corenet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/serial"
+	coresession "github.com/xtls/xray-core/common/session"
 	core "github.com/xtls/xray-core/core"
+	coreoutbound "github.com/xtls/xray-core/features/outbound"
+	corerouting "github.com/xtls/xray-core/features/routing"
 	corestats "github.com/xtls/xray-core/features/stats"
 	coreserial "github.com/xtls/xray-core/infra/conf/serial"
 )
@@ -60,6 +67,233 @@ func (x *CoreController) MeasureDelay(url string) (int64, error) {
 	defer cancel()
 
 	return measureInstDelay(ctx, x.coreInstance, url)
+}
+
+// GetBalancerPrincipleTarget returns the strategy's current first-choice
+// outbound. An empty result means the observatory has not produced a viable
+// target yet or the running profile has no compatible balancer.
+func (x *CoreController) GetBalancerPrincipleTarget(balancerTag string) (string, error) {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if !x.IsRunning || x.coreInstance == nil {
+		return "", nil
+	}
+	return firstBalancerPrincipleTarget(x.coreInstance, balancerTag)
+}
+
+func firstBalancerPrincipleTarget(inst *core.Instance, balancerTag string) (string, error) {
+	if balancerTag == "" {
+		return "", nil
+	}
+	if inst == nil {
+		return "", errors.New("core instance is nil")
+	}
+	principle, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerPrincipleTarget)
+	if !ok {
+		return "", errors.New("router does not expose balancer principle targets")
+	}
+	targets, err := principle.GetPrincipleTarget(balancerTag)
+	if err != nil {
+		return "", err
+	}
+	for _, target := range targets {
+		if target != "" {
+			return target, nil
+		}
+	}
+	return "", nil
+}
+
+// GetBalancerOutbound resolves an explicit app-request outbound, honoring an active
+// override and the configured group fallback when the strategy has no target.
+func (x *CoreController) GetBalancerOutbound(balancerTag string) (string, error) {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	inst := x.coreInstance
+	if !x.IsRunning || inst == nil {
+		return "", errors.New("core is not running")
+	}
+	if router, ok := inst.GetFeature(corerouting.RouterType()).(corerouting.BalancerOverrider); ok {
+		target, err := router.GetOverrideTarget(balancerTag)
+		if err == nil && target != "" {
+			return target, nil
+		}
+	}
+	target, err := firstBalancerPrincipleTarget(inst, balancerTag)
+	if err == nil && target != "" {
+		return target, nil
+	}
+	fallback := x.balancerFallbacks[balancerTag]
+	if fallback != "" {
+		manager, ok := inst.GetFeature(coreoutbound.ManagerType()).(coreoutbound.Manager)
+		if ok && manager.GetHandler(fallback) != nil {
+			return fallback, nil
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("balancer %q has no usable outbound", balancerTag)
+}
+
+func configuredBalancerFallbacks(config *core.Config) map[string]string {
+	fallbacks := make(map[string]string)
+	for _, app := range config.App {
+		if app.Type != "xray.app.router.Config" {
+			continue
+		}
+		// LoadJSONConfig has already decoded and validated the router configuration.
+		instance, err := app.GetInstance()
+		router, ok := instance.(*corerouter.Config)
+		if err != nil || !ok {
+			continue
+		}
+		for _, balancer := range router.GetBalancingRule() {
+			if fallback := balancer.GetFallbackTag(); fallback != "" {
+				fallbacks[balancer.GetTag()] = fallback
+			}
+		}
+	}
+	return fallbacks
+}
+
+// GetUrlContent retrieves a URL through the requested outbound of the current core instance.
+func (x *CoreController) GetUrlContent(url string, outboundTag string) (string, error) {
+	resp, err := x.getURL(url, outboundTag, "", 5*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	return string(content), nil
+}
+
+// DownloadUrlToFile downloads a URL through the requested outbound of the
+// current core instance. Headers are supplied as a JSON object.
+func (x *CoreController) DownloadUrlToFile(url string, outboundTag string, headersJSON string, filePath string, timeoutMillis int64) error {
+	_, err := x.DownloadUrlToFileWithHeaders(url, outboundTag, headersJSON, filePath, timeoutMillis)
+	return err
+}
+
+// DownloadUrlToFileWithHeaders downloads a URL and returns the final response
+// headers as a JSON object of string arrays, only after the file is complete.
+// It uses the same outbound routing and transactional file replacement as DownloadUrlToFile.
+func (x *CoreController) DownloadUrlToFileWithHeaders(url string, outboundTag string, headersJSON string, filePath string, timeoutMillis int64) (string, error) {
+	if filePath == "" {
+		return "", errors.New("file path is empty")
+	}
+	timeout := time.Duration(timeoutMillis) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+
+	resp, err := x.getURL(url, outboundTag, headersJSON, timeout)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	responseHeaders, err := json.Marshal(resp.Header)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode response headers: %w", err)
+	}
+
+	file, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+".*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	temporaryPath := file.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+		_ = os.Remove(temporaryPath)
+	}()
+
+	written, err := io.Copy(file, resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to write response body: %w", err)
+	}
+	if resp.ContentLength >= 0 && written != resp.ContentLength {
+		return "", fmt.Errorf("response length mismatch: expected %d bytes, got %d", resp.ContentLength, written)
+	}
+	if err = file.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temporary file: %w", err)
+	}
+	closed = true
+	if err = os.Rename(temporaryPath, filePath); err != nil {
+		return "", fmt.Errorf("failed to replace destination file: %w", err)
+	}
+	return string(responseHeaders), nil
+}
+
+func (x *CoreController) getURL(url string, outboundTag string, headersJSON string, timeout time.Duration) (*http.Response, error) {
+	x.coreMutex.Lock()
+	inst := x.coreInstance
+	running := x.IsRunning
+	x.coreMutex.Unlock()
+
+	if !running || inst == nil {
+		return nil, errors.New("core is not running")
+	}
+	if outboundTag == "" {
+		return nil, errors.New("outbound tag is empty")
+	}
+
+	tr := &http.Transport{
+		TLSHandshakeTimeout: 5 * time.Second,
+		DisableKeepAlives:   true,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dest, err := corenet.ParseDestination(fmt.Sprintf("%s:%s", network, addr))
+			if err != nil {
+				return nil, err
+			}
+			ctx = coresession.SetForcedOutboundTagToContext(ctx, outboundTag)
+			return core.Dial(ctx, inst, dest)
+		},
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if headersJSON != "" {
+		headers := make(map[string]string)
+		if err := json.Unmarshal([]byte(headersJSON), &headers); err != nil {
+			return nil, fmt.Errorf("failed to parse request headers: %w", err)
+		}
+		applyRequestHeaders(req, headers)
+	}
+
+	resp, err := (&http.Client{Transport: tr, Timeout: timeout}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode < http.StatusOK ||
+		resp.StatusCode >= http.StatusMultipleChoices ||
+		resp.StatusCode == http.StatusPartialContent {
+		resp.Body.Close()
+		return nil, fmt.Errorf("invalid status: %s", resp.Status)
+	}
+
+	return resp, nil
+}
+
+func applyRequestHeaders(req *http.Request, headers map[string]string) {
+	for key, value := range headers {
+		if strings.EqualFold(key, "Host") {
+			req.Host = value
+			continue
+		}
+		req.Header.Set(key, value)
+	}
 }
 
 // MeasureOutboundDelay measures the outbound delay for a given configuration and URL

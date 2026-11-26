@@ -33,11 +33,12 @@ const (
 
 // CoreController represents a controller for managing Xray core instance lifecycle
 type CoreController struct {
-	CallbackHandler CoreCallbackHandler
-	statsManager    corestats.Manager
-	coreMutex       sync.Mutex
-	coreInstance    *core.Instance
-	IsRunning       bool
+	CallbackHandler   CoreCallbackHandler
+	statsManager      corestats.Manager
+	coreMutex         sync.Mutex
+	coreInstance      *core.Instance
+	balancerFallbacks map[string]string
+	IsRunning         bool
 }
 
 // CoreCallbackHandler defines interface for receiving callbacks and notifications from the core service
@@ -157,6 +158,7 @@ func (x *CoreController) doShutdown() {
 	}
 	x.IsRunning = false
 	x.statsManager = nil
+	x.balancerFallbacks = nil
 }
 
 // doStartLoop sets up and starts the Xray core
@@ -180,6 +182,7 @@ func (x *CoreController) doStartLoop(configContent string) error {
 		return fmt.Errorf("startup failed: %w", err)
 	}
 
+	x.balancerFallbacks = configuredBalancerFallbacks(config)
 	x.CallbackHandler.Startup()
 	x.CallbackHandler.OnEmitStatus(0, "Started successfully, running")
 
